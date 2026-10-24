@@ -121,10 +121,15 @@ function makeGame(skills = [[], [], []], responder = null) {
   const tiesuo = card('t3', 'tiesuo');
   const wuzhong = card('t4', 'wuzhong');
 
+  const cort0 = g.candidatesFor(p0, tao);
+  ok(cort0.length === 0, '满血时桃无可用目标');
+  ok(g.canUse(p0, tao, [p0]).ok === false, '满血不应能使用桃');
+  p0.hp = p0.maxHp - 1; // 受伤后才可用桃
   const cort = g.candidatesFor(p0, tao);
   ok(cort.length === 1 && cort[0] === p0, '桃的候选目标应只有自己');
   ok(g.canUse(p0, tao, [p0]).ok === true, '桃不能对自己使用（核心 bug）');
   ok(g.canUse(p0, tao, [p1]).ok === false, '桃不应能对别人使用');
+  p0.hp = p0.maxHp;
 
   ok(g.candidatesFor(p0, wuzhong).every(p => p === p0), '无中生有应只能选自己');
   ok(g.canUse(p0, wuzhong, [p0]).ok === true, '无中生有不能对自己使用');
@@ -136,6 +141,32 @@ function makeGame(skills = [[], [], []], responder = null) {
   const cts = g.candidatesFor(p0, tiesuo);
   ok(cts.includes(p0) && cts.includes(p1), '铁索连环应自己与他人皆可选');
   ok(g.canUse(p0, tiesuo, [p0, p1]).ok === true, '铁索连环应能对自己+他人使用');
+}
+
+// 7. 过河拆桥 / 顺手牵羊：手牌必须暗选（不得泄漏牌名），装备区/判定区明示
+{
+  const seen = [];
+  const responder = {
+    async askPlay() { return { endPhase: true }; },
+    async ask(g, p, req) {
+      if (req.kind === 'choice') { seen.push(...(req.options || [])); return { index: 0 }; }
+      if (req.kind === 'targets') return { seats: [1] };
+      return null;
+    },
+  };
+  const g = makeGame([[], [], []], responder);
+  const p0 = g.players[0], p1 = g.players[1];
+  p1.hand.length = 0; // 清掉初始发牌，选项数可控
+  p1.hand.push(card('h1', 'sha', 'spade', 7), card('h2', 'tao', 'heart', 3));
+  p1.equips.armor = card('e1', 'bagua', 'spade', 2);
+  p1.judgeZone.push({ card: card('j1', 'lebu', 'club', 6), name: 'lebu' });
+  await g.chooseCardFrom(p0, p1, { reason: 'guohe', includeJudge: true });
+  const txt = seen.join('|');
+  ok(seen.length === 4, `过河拆桥选项数应为 4（2 手牌+1 装备+1 判定），实际 ${seen.length}`);
+  ok(/装备区：八卦阵/.test(txt), '装备区的牌应明示牌名');
+  ok(/判定区：乐不思蜀/.test(txt), '判定区的牌应明示牌名');
+  ok(!/杀|桃/.test(txt), `手牌不得泄漏牌名（实际选项：${txt}）`);
+  ok(seen.filter(x => /^手牌/.test(x)).length === 2, '手牌应有 2 个暗选选项');
 }
 
 console.log(`\n回归用例：通过 ${pass} / 失败 ${fail}`);

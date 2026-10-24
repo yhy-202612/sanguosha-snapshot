@@ -203,3 +203,102 @@ input:focus { border-color: var(--gold); }
   body.log-open #table { margin-right: 0; }
   #logPanel { width: 200px; background: #0f131aee; backdrop-filter: blur(6px); }
 }
+
+/* 第三方在线版本入口 */
+.alt-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+.alt-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;
+  border: 1px solid var(--line, #e3e0d8); border-left: 3px solid var(--primary, #8b1d24);
+  border-radius: 8px; background: var(--card, #fff); text-decoration: none; color: inherit;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.alt-card b { font-size: 14px; color: var(--primary, #8b1d24); }
+.alt-card span { font-size: 12px; line-height: 1.55; color: var(--muted, #6b6459); }
+.alt-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.08); }
+@media (max-width: 640px) {
+  .alt-list { grid-template-columns: 1fr; }
+  .alt-card span { font-size: 11.5px; }
+}
+
+/* ============ 自身装备条 ============ */
+.equip-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 2px 0 4px; min-height: 24px; }
+.equip-chip {
+  font-size: 11.5px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  border: 1px solid #6b5a33; background: #2a2416; color: #e8d9b0; white-space: nowrap;
+}
+.equip-chip:hover { border-color: var(--gold); }
+.equip-chip.empty { border-style: dashed; border-color: #3a4456; background: transparent; color: #5f6b7e; cursor: default; }
+.equip-chip .slot { color: #9a8b64; margin-right: 4px; }
+.judge-chip { border-color: #7a4a2a; background: #2c1e16; color: #f0c9a0; }
+.equip-label { font-size: 11px; color: var(--muted); margin-right: 2px; }
+
+/* ============ 卡牌详情浮层（桌面 hover / 手机长按） ============ */
+#cardTip {
+  position: fixed; z-index: 80; max-width: min(300px, 86vw); pointer-events: none;
+  background: #10141bee; border: 1px solid var(--gold); border-radius: 10px; padding: 9px 11px;
+  box-shadow: 0 12px 32px #000b; backdrop-filter: blur(6px); opacity: 0; transition: opacity .12s;
+}
+#cardTip.show { opacity: 1; }
+#cardTip .t { font-size: 13px; font-weight: 700; color: var(--gold); margin-bottom: 3px; }
+#cardTip .m { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+#cardTip .d { font-size: 12px; line-height: 1.6; color: #d5dde9; }
+
+/* ============ 通用弹窗（技能面板 / 托管设置） ============ */
+.modal-mask { position: fixed; inset: 0; background: #05070ade; z-index: 70; display: flex; align-items: center; justify-content: center; padding: 14px; }
+.modal-box {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px;
+  width: min(660px, 100%); max-height: calc(100vh - 28px); overflow-y: auto;
+}
+.modal-box h3 { color: var(--gold); font-size: 15px; margin-bottom: 4px; }
+.modal-box .sub { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.modal-box .close-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.pk-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--line); }
+.pk-row:first-of-type { border-top: 0; }
+.pk-row .who { min-width: 92px; }
+.pk-row .who b { font-size: 13px; }
+.pk-row .who .g { font-size: 11.5px; color: var(--gold); }
+.pk-row .who .hp { font-size: 11px; color: var(--red2); }
+.pk-row.me .who b { color: var(--gold); }
+.skill-list { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.skill-item { font-size: 12px; line-height: 1.55; }
+.skill-item .sn { color: #e8c98a; font-weight: 600; margin-right: 5px; }
+.skill-item .sd { color: #a9b6c9; }
+.mark-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
+.mark-tag { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #1d2a3d; border: 1px solid #35507a; color: #a9c8f0; }
+.mark-tag.status { background: #2c2318; border-color: #6b5a33; color: #e8d9b0; }
+
+/* ============ 托管设置 ============ */
+.auto-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.auto-row label.check { width: auto; }
+.sec-input { width: 74px; flex: 0 0 auto; background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; color: var(--text); }
+
+/* ============ 大厅：将池 / 选将 ============ */
+button.mini { padding: 3px 9px; font-size: 12px; border-radius: 6px; }
+.row.col { flex-direction: column; align-items: stretch; gap: 6px; }
+.row.col > label { width: auto; display: flex; align-items: center; gap: 8px; }
+.pool-box { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: #0d1117; }
+.pool-tools { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.pool-count { font-size: 12px; color: var(--muted); }
+.pool-list { max-height: 210px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.pool-pack { font-size: 11.5px; color: var(--gold); margin-bottom: 3px; }
+.pool-grid { display: flex; gap: 5px; flex-wrap: wrap; }
+.pool-item { font-size: 12px; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line); color: var(--muted); cursor: pointer; }
+.pool-item.on { background: #2b1d1c; border-color: var(--red2); color: #ffd9d5; }
+.pick-select { flex: 1; min-width: 140px; background: #0d1117; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: var(--text); }
+.pool-item.dis { opacity: .35; cursor: not-allowed; text-decoration: line-through; }
+
+/* 轻提示 */
+.toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px);
+  background: #1b2230f2; border: 1px solid var(--gold); color: var(--text);
+  padding: 9px 16px; border-radius: 10px; font-size: 13px; z-index: 90; max-width: 88vw;
+  opacity: 0; pointer-events: none; transition: .18s; box-shadow: 0 10px 28px #000a;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* 对局内：对手卡片上的装备 / 标记 */
+.pcard .eq-row { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+.pcard .eq-row .equip-chip { font-size: 10.5px; padding: 1px 6px; }
+.pcard .mark-row .mark-tag { font-size: 10px; }
+.pcard .pg:hover { color: var(--gold); text-decoration: underline dotted; }
+

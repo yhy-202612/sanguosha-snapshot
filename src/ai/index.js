@@ -8,6 +8,11 @@ const CARD_VALUE = {
 
 function value(c) { return CARD_VALUE[c.name] ?? 3; }
 
+// 技能 id 去包前缀：jie_zhiheng / mou_zhiheng / ji_zhiheng → zhiheng
+export function baseSkillId(id) {
+  return String(id || '').replace(/^(jie|mou|ji|shen|sp|ol|sc|re)_/, '');
+}
+
 // 敌我判定
 export function isEnemy(game, me, other) {
   if (me === other) return false;
@@ -59,15 +64,20 @@ export class AIPlayer {
     }
 
     // 3) 主动技
+    // 注意：界/谋/极 武将的技能 id 带前缀（jie_zhiheng / mou_zhiheng…），
+    // 直接比 s.id 会全部落空 → AI 永远不发动这些主动技。统一按「去前缀基名」判定。
     const act = game.activeSkillsOf(p);
     for (const s of act) {
-      if (s.id === 'zhiheng' && p.hand.length >= 4) return { skill: s.id };
-      if (s.id === 'kurou' && p.hp >= 3 && p.hand.length <= 3) return { skill: s.id };
-      if (s.id === 'qingnang' && game.alive().some(x => x.hp < x.maxHp) && p.hand.length >= 2) return { skill: s.id };
-      if (s.id === 'jieyin' && p.hand.length >= 3 && friends.some(f => f.gender === 'male' && f.hp < f.maxHp)) return { skill: s.id };
-      if (s.id === 'lijian' && p.hand.length >= 2 && enemies.filter(e => e.gender === 'male').length >= 2) return { skill: s.id };
-      if (s.id === 'rende' && p.hand.length >= 3 && friends.length) return { skill: s.id };
-      if (s.id === 'fanjian' && p.hand.length >= 2 && enemies.length) return { skill: s.id };
+      const bid = baseSkillId(s.id);
+      if (bid === 'zhiheng' && p.hand.length >= 4) return { skill: s.id };
+      if (bid === 'kurou' && p.hp >= 3 && p.hand.length <= 3) return { skill: s.id };
+      if (bid === 'qingnang' && p.hand.length >= 4 && game.alive().some(x => x.hp < x.maxHp)) return { skill: s.id };
+      if (bid === 'jieyin' && p.hand.length >= 3 && friends.some(f => f.gender === 'male' && f.hp < f.maxHp)) return { skill: s.id };
+      if (bid === 'lijian' && p.hand.length >= 2 && enemies.filter(e => e.gender === 'male').length >= 2) return { skill: s.id };
+      if (bid === 'rende' && p.hand.length >= 3 && friends.length) return { skill: s.id };
+      if (bid === 'fanjian' && p.hand.length >= 2 && enemies.length) return { skill: s.id };
+      if (bid === 'qixi' && p.hand.length >= 2 && enemies.some(e => e.hand.length || Object.values(e.equips).some(Boolean))) return { skill: s.id };
+      if (bid === 'tuxi' && enemies.some(e => e.hand.length)) return { skill: s.id };
     }
 
     // 4) 无中生有 / 五谷 / 桃园
@@ -91,14 +101,16 @@ export class AIPlayer {
       }
     }
 
-    // 6) 杀
+    // 6) 杀（必须过 canUse，否则「本回合杀已用尽」时会被反复选中，刷出大量失败日志）
     const shaCards = p.hand.filter(c => c.name === 'sha');
     if (shaCards.length) {
       for (const c of shaCards) {
         const cands = game.candidatesFor(p, c).filter(t => isEnemy(game, p, t));
         if (cands.length) {
           const t = cands.sort((a, b) => a.hp - b.hp)[0];
-          if (t.hp <= 2 || game.rng.next() < this.aggression) return { card: c, targets: [t] };
+          if ((t.hp <= 2 || game.rng.next() < this.aggression) && game.canUse(p, c, [t]).ok) {
+            return { card: c, targets: [t] };
+          }
         }
       }
     }
@@ -184,6 +196,11 @@ export class AIPlayer {
         return null;
       }
       case 'confirm': {
+        // 「再次发动」类（界青囊红牌续发等）：手牌不多就别烧牌换血，否则弃光防御牌、
+        // 会把对局拖成无意义的消耗战（实测 hulao 出现 568 回合僵局）。
+        if (/再次发动|再发动/.test(req.prompt || '')) {
+          return { yes: p.hand.length >= 5 && game.rng.next() < 0.35 };
+        }
         if (p.hp <= 1 && /闪|桃|杀/.test(req.prompt)) return { yes: true };
         return { yes: game.rng.next() < 0.7 };
       }

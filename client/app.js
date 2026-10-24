@@ -8,6 +8,10 @@ const S = {
   meta: null, cards: {}, roomId: null, token: null, seat: null,
   snap: null, ask: null, sel: [], targets: [], view: 'lobby', es: null, timer: null,
   logOpen: false, logTouched: false,
+  // 大厅配置：武将包多选 / 自定义将池 / 选将模式 / 托管
+  packs: new Set(['standard']), pool: new Set(), pickMode: 'random',
+  autoCfg: { enabled: false, seconds: 15 }, room: null,
+  tipTimer: null, tipHideTimer: null, suppressClickUntil: 0, toastEl: null,
 };
 
 async function api(path, body, method = 'POST') {
@@ -25,6 +29,9 @@ async function init() {
   for (const c of meta.cards || []) S.cards[c.name] = c;
   renderModeChips();
   renderPackChips();
+  renderPickModeChips();
+  renderPoolList();
+  refreshHostPick();
   renderGenerals();
   bind();
 }
@@ -41,15 +48,97 @@ function renderModeChips() {
   }
 }
 
+// 武将包：多选（至少保留一个）
 function renderPackChips() {
   const box = $('#packList');
   box.innerHTML = '';
   for (const p of S.meta.packs) {
-    const c = el('div', 'chip' + (p.id === 'standard' ? ' on' : ''), `${p.name}(${p.count})`);
+    const on = S.packs.has(p.id);
+    const c = el('div', 'chip' + (on ? ' on' : ''), `${p.name}(${p.count})`);
     c.dataset.pack = p.id;
-    c.onclick = () => { box.querySelectorAll('.chip').forEach(x => x.classList.remove('on')); c.classList.add('on'); };
+    c.onclick = () => {
+      if (S.packs.has(p.id)) {
+        if (S.packs.size <= 1) return toast('至少选择一个武将包');
+        S.packs.delete(p.id);
+      } else S.packs.add(p.id);
+      renderPackChips();
+      renderPoolList();
+      refreshHostPick();
+    };
     box.appendChild(c);
   }
+}
+
+function renderPickModeChips() {
+  const box = $('#pickModeList');
+  box.innerHTML = '';
+  for (const [id, label, tip] of [
+    ['random', '随机分配', '由系统随机发将'],
+    ['host', '仅房主自选', '只有房主能选武将，其他人随机'],
+    ['all', '所有人自选', '每个玩家都能在房间里挑武将'],
+  ]) {
+    const c = el('div', 'chip' + (S.pickMode === id ? ' on' : ''), label);
+    c.title = tip;
+    c.dataset.pick = id;
+    c.onclick = () => {
+      S.pickMode = id;
+      renderPickModeChips();
+      refreshHostPick();
+    };
+    box.appendChild(c);
+  }
+}
+
+// 大厅的自定义将池：按包分组列出所有武将，点击切换
+function renderPoolList() {
+  const box = $('#poolList');
+  if (!box) return;
+  box.innerHTML = '';
+  const packName = {};
+  for (const p of S.meta.packs) packName[p.id] = p.name;
+  const groups = {};
+  for (const g of S.meta.generals) (groups[g.pack] = groups[g.pack] || []).push(g);
+  for (const pack of Object.keys(groups)) {
+    const wrap = el('div', '');
+    wrap.appendChild(el('div', 'pool-pack', `${packName[pack] || pack}（${groups[pack].length}）`));
+    const grid = el('div', 'pool-grid');
+    for (const g of groups[pack].sort((a, b) => a.name.localeCompare(b.name, 'zh'))) {
+      const it = el('div', 'pool-item' + (S.pool.has(g.id) ? ' on' : ''), g.name);
+      it.dataset.gid = g.id;
+      it.title = `${g.kingdom} · ${g.hp} 体力`;
+      it.onclick = () => {
+        if (S.pool.has(g.id)) S.pool.delete(g.id); else S.pool.add(g.id);
+        it.classList.toggle('on', S.pool.has(g.id));
+        updatePoolCount();
+        refreshHostPick();
+      };
+      grid.appendChild(it);
+    }
+    wrap.appendChild(grid);
+    box.appendChild(wrap);
+  }
+  updatePoolCount();
+}
+
+function updatePoolCount() {
+  const n = S.pool.size;
+  const c = $('#poolCount');
+  if (c) c.textContent = n ? `已选 ${n} 名武将` : '未指定则按武将包随机';
+}
+
+// 当前大厅将池（自定义优先，否则按选中的包）
+function lobbyPool() {
+  if (S.pool.size) return S.meta.generals.filter(g => S.pool.has(g.id));
+  return S.meta.generals.filter(g => S.packs.has(g.pack));
+}
+
+function refreshHostPick() {
+  const sel = $('#hostPick');
+  if (!sel) return;
+  const pool = lobbyPool().slice().sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  sel.innerHTML = '<option value="">（随机）</option>' +
+    pool.map(g => `<option value="${esc(g.id)}">${esc(g.name)}（${esc(g.kingdom)} ${g.hp}体力）</option>`).join('');
+  sel.disabled = S.pickMode === 'random';
 }
 
 function renderGenerals() {
@@ -58,7 +147,9 @@ function renderGenerals() {
   const list = S.meta.generals.slice().sort((a, b) => (a.pack === b.pack ? a.name.localeCompare(b.name, 'zh') : a.pack.localeCompare(b.pack)));
   for (const g of list) {
     const card = el('div', 'gcard');
-    card.innerHTML = `<b>${g.name}</b><div class="k">${g.kingdom} · ${g.hp}体力</div><div class="s">${(g.skills || []).join(' / ')}</div>`;
+    const sk = (g.skillsDetail || []).map(s => s.name).join(' / ') || (g.skills || []).join(' / ');
+    card.innerHTML = `<b>${esc(g.name)}</b><div class="k">${esc(g.kingdom)} · ${g.hp}体力</div><div class="s">${esc(sk)}</div>`;
+    card.onclick = () => openGeneralDetail(g);
     box.appendChild(card);
   }
 }
@@ -66,13 +157,19 @@ function renderGenerals() {
 function bind() {
   $('#btnCreate').onclick = async () => {
     const modeId = $('#modeList .chip.on')?.dataset.mode || 'identity';
-    const pack = $('#packList .chip.on')?.dataset.pack || 'standard';
     const maxSeats = Number($('#seatCount').value || 3);
     const name = ($('#nickname').value || '房主').trim().slice(0, 12) || '房主';
     const aiSeats = $('#aiFill').checked ? maxSeats : 0;
-    const r = await api('/api/rooms', { modeId, pack, maxSeats, name, aiSeats });
+    const packs = [...S.packs];
+    const customPool = S.pool.size ? [...S.pool] : null;
+    const pickMode = S.pickMode;
+    const generalId = pickMode === 'random' ? null : ($('#hostPick').value || null);
+    const autoEnable = !!$('#autoOn').checked;
+    const autoSeconds = Math.max(5, Math.min(180, Number($('#autoSec').value || 15)));
+    const r = await api('/api/rooms', { modeId, packs, customPool, pickMode, generalId, maxSeats, name, aiSeats, autoEnable, autoSeconds });
     if (!r.ok) return alert(r.error || '创建失败');
     S.roomId = r.roomId; S.token = r.token; S.seat = r.seat;
+    S.autoCfg = { enabled: autoEnable, seconds: autoSeconds };
     showRoom(r.room);
     if (aiSeats >= maxSeats) {
       await (S.esReady || Promise.resolve());
@@ -100,9 +197,253 @@ function bind() {
   $('#btnLog').onclick = () => { S.logTouched = true; setLogOpen(!S.logOpen); };
   $('#btnLogClose').onclick = () => { S.logTouched = true; setLogOpen(false); };
   $('#btnLogClear').onclick = () => { $('#logList').innerHTML = ''; };
+  $('#btnSkills').onclick = openSkills;
+  $('#btnAuto').onclick = openAutoSettings;
+  $('#btnPoolToggle').onclick = () => {
+    const box = $('#poolBox');
+    box.classList.toggle('hidden');
+    $('#btnPoolToggle').textContent = box.classList.contains('hidden') ? '展开' : '收起';
+  };
+  $('#btnPoolAll').onclick = () => { for (const g of lobbyPool()) S.pool.add(g.id); renderPoolList(); refreshHostPick(); };
+  $('#btnPoolNone').onclick = () => { S.pool.clear(); renderPoolList(); refreshHostPick(); };
+  // 托管设置记忆
+  const savedAuto = loadAutoCfg();
+  $('#autoOn').checked = !!savedAuto.enabled;
+  $('#autoSec').value = savedAuto.seconds;
+  $('#autoOn').onchange = saveAutoCfg;
+  $('#autoSec').onchange = saveAutoCfg;
+}
+
+function loadAutoCfg() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('sg_auto') || 'null');
+    if (raw && typeof raw === 'object') return { enabled: !!raw.enabled, seconds: Math.max(5, Math.min(180, Number(raw.seconds) || 15)) };
+  } catch {}
+  return { enabled: false, seconds: 15 };
+}
+function saveAutoCfg() {
+  const cfg = { enabled: !!$('#autoOn').checked, seconds: Math.max(5, Math.min(180, Number($('#autoSec').value || 15))) };
+  try { localStorage.setItem('sg_auto', JSON.stringify(cfg)); } catch {}
+  return cfg;
 }
 
 const isMobileLayout = () => window.matchMedia('(max-width: 760px)').matches;
+
+const SUIT_CHAR = { spade: '♠', heart: '♥', club: '♣', diamond: '♦' };
+const SUB_CN = { weapon: '武器', armor: '防具', 'horse+': '+1马', 'horse-': '-1马' };
+const EQUIP_SLOTS = [['weapon', '武器'], ['armor', '防具'], ['horsePlus', '+1马'], ['horseMinus', '-1马']];
+
+// ---------------- 轻提示 ----------------
+function toast(text, ms = 2400) {
+  let t = S.toastEl;
+  if (!t || !t.isConnected) { t = el('div', 'toast'); document.body.appendChild(t); S.toastEl = t; }
+  t.textContent = text;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+// ---------------- 卡牌详情（桌面 hover / 手机长按） ----------------
+function cardInfo(cardOrName) {
+  const name = typeof cardOrName === 'string' ? cardOrName : cardOrName?.name;
+  const meta = S.cards[name] || {};
+  let suit = '';
+  if (cardOrName && typeof cardOrName === 'object') suit = `${SUIT_CHAR[cardOrName.suit] || ''}${cardOrName.num ?? ''}`;
+  const parts = [];
+  if (meta.type) parts.push(typeCN(meta.type));
+  if (meta.sub) parts.push(SUB_CN[meta.sub] || meta.sub);
+  if (meta.range) parts.push(`攻击范围 ${meta.range}`);
+  if (meta.delayed) parts.push('延时锦囊');
+  return {
+    title: (meta.cn || name) + (suit ? ` ${suit}` : ''),
+    sub: parts.join(' · '),
+    desc: meta.desc || '（暂无说明）',
+  };
+}
+
+function showCardTip(info, anchor) {
+  let tip = document.getElementById('cardTip');
+  if (!tip) { tip = el('div'); tip.id = 'cardTip'; document.body.appendChild(tip); }
+  tip.innerHTML = `<div class="t">${esc(info.title)}</div>${info.sub ? `<div class="m">${esc(info.sub)}</div>` : ''}<div class="d">${esc(info.desc)}</div>`;
+  tip.classList.add('show');
+  const r = anchor?.getBoundingClientRect?.() || { left: innerWidth / 2, top: 120, width: 0, height: 0, bottom: 120 };
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let left = r.left + r.width / 2 - tw / 2;
+  left = Math.max(8, Math.min(innerWidth - tw - 8, left));
+  let top = r.top - th - 8;
+  if (top < 8) top = Math.min(innerHeight - th - 8, r.bottom + 8);
+  tip.style.left = `${Math.max(8, left)}px`;
+  tip.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideCardTip() {
+  const tip = document.getElementById('cardTip');
+  if (tip) tip.classList.remove('show');
+}
+
+// 给任意元素挂「桌面悬停 / 手机长按」查看牌面详情
+function bindCardTip(node, getCard) {
+  const show = () => { const c = getCard(); if (c) showCardTip(cardInfo(c), node); };
+  node.addEventListener('mouseenter', () => { clearTimeout(S.tipTimer); S.tipTimer = setTimeout(show, 240); });
+  node.addEventListener('mouseleave', () => { clearTimeout(S.tipTimer); hideCardTip(); });
+  node.addEventListener('touchstart', () => {
+    clearTimeout(S.tipTimer);
+    S.tipTimer = setTimeout(() => { show(); S.suppressClickUntil = Date.now() + 900; }, 420);
+  }, { passive: true });
+  node.addEventListener('touchmove', () => { clearTimeout(S.tipTimer); hideCardTip(); }, { passive: true });
+  node.addEventListener('touchend', () => { clearTimeout(S.tipTimer); clearTimeout(S.tipHideTimer); S.tipHideTimer = setTimeout(hideCardTip, 2000); });
+  node.addEventListener('touchcancel', () => { clearTimeout(S.tipTimer); hideCardTip(); });
+}
+
+// ---------------- 通用弹窗 ----------------
+function modal(title, sub) {
+  const mask = el('div', 'modal-mask');
+  const box = el('div', 'modal-box');
+  box.innerHTML = `<h3>${esc(title)}</h3>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}<div class="body"></div>`;
+  const closeRow = el('div', 'close-row');
+  const btn = el('button', 'ghost', '关闭');
+  btn.onclick = () => mask.remove();
+  closeRow.appendChild(btn);
+  box.appendChild(closeRow);
+  mask.appendChild(box);
+  document.body.appendChild(mask);
+  mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+  return { mask, body: box.querySelector('.body'), closeRow };
+}
+
+// ---------------- 自身装备 / 判定 / 标记 ----------------
+function renderSelfEquips(me) {
+  const box = $('#selfEquips');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!me) return;
+  box.appendChild(el('span', 'equip-label', '装备'));
+  for (const [slot, cn] of EQUIP_SLOTS) {
+    const c = me.equips?.[slot];
+    const chip = el('div', 'equip-chip' + (c ? '' : ' empty'),
+      c ? `${esc(S.cards[c.name]?.cn || c.name)}${SUIT_CHAR[c.suit] || ''}${c.num ?? ''}` : `${cn} —`);
+    if (c) bindCardTip(chip, () => c);
+    box.appendChild(chip);
+  }
+  const judge = me.judgeZone || [];
+  if (judge.length) {
+    box.appendChild(el('span', 'equip-label', '判定'));
+    for (const z of judge) {
+      const chip = el('div', 'equip-chip judge-chip', esc(S.cards[z.name]?.cn || z.name));
+      bindCardTip(chip, () => z);
+      box.appendChild(chip);
+    }
+  }
+  const marks = [];
+  for (const [k, v] of Object.entries(me.marks || {})) if (v) marks.push([k, v]);
+  if (me.chained) marks.push(['连环', '']);
+  if (me.flags?.jiu) marks.push(['酒', me.flags.jiu]);
+  if (me.flags?.shaUsed) marks.push(['已出杀', me.flags.shaUsed]);
+  for (const [k, v] of marks) {
+    box.appendChild(el('span', 'mark-tag', `${esc(k)}${v ? ' ' + esc(v) : ''}`));
+  }
+}
+
+// ---------------- 技能一览（含自己 + 标记数） ----------------
+function openSkills() {
+  const snap = S.snap;
+  if (!snap?.players) return toast('对局还没开始');
+  const { body } = modal('技能一览', '包含全部角色（含你自己）的武将技能与标记；标记数按当前状态实时显示');
+  for (const p of snap.players) {
+    const row = el('div', 'pk-row' + (p.seat === S.seat ? ' me' : '') + (p.alive ? '' : ' dead'));
+    const who = el('div', 'who');
+    who.innerHTML = `<b>${esc(p.name)}${p.seat === S.seat ? '（你）' : ''}</b>
+      <div class="g">${esc(p.generalName || '')}</div>
+      <div class="hp">${p.hp}/${p.maxHp} 体力 · 手牌 ${p.handCount}</div>`;
+    const tags = [];
+    for (const [k, v] of Object.entries(p.marks || {})) if (v) tags.push(`<span class="mark-tag">${esc(k)} ${esc(v)}</span>`);
+    if (p.chained) tags.push('<span class="mark-tag status">连环</span>');
+    if (p.flags?.jiu) tags.push(`<span class="mark-tag status">酒 ×${esc(p.flags.jiu)}</span>`);
+    if (p.flags?.shaUsed) tags.push(`<span class="mark-tag status">已出杀 ${esc(p.flags.shaUsed)}</span>`);
+    if (tags.length) { const mr = el('div', 'mark-row'); mr.innerHTML = tags.join(''); who.appendChild(mr); }
+    row.appendChild(who);
+    const list = el('div', 'skill-list');
+    const skills = p.skills || [];
+    if (!skills.length) list.appendChild(el('div', 'skill-item', '（无技能）'));
+    for (const s of skills) {
+      const item = el('div', 'skill-item');
+      item.innerHTML = `<span class="sn">${esc(s.name)}</span><span class="sd">${esc(s.desc || '')}</span>`;
+      list.appendChild(item);
+    }
+    row.appendChild(list);
+    body.appendChild(row);
+  }
+}
+
+function openGeneralDetail(g) {
+  const { body } = modal(`${g.name}`, `${g.kingdom} · ${g.hp} 体力 · ${packName(g.pack)}`);
+  for (const s of g.skillsDetail || []) {
+    const item = el('div', 'skill-item');
+    item.innerHTML = `<span class="sn">${esc(s.name)}</span><span class="sd">${esc(s.desc || '')}</span>`;
+    body.appendChild(item);
+  }
+}
+
+function packName(id) {
+  return (S.meta?.packs || []).find(p => p.id === id)?.name || id;
+}
+
+// ---------------- 托管设置 ----------------
+function openAutoSettings() {
+  const cfg = { ...S.autoCfg };
+  const { mask, body, closeRow } = modal('托管设置', '开启后，轮到你操作时若超过设定秒数没有动作，将由电脑代打；你随时可在这里改回来');
+  body.innerHTML = `<div class="auto-row">
+      <label class="check"><input id="autoEnabled" type="checkbox" ${cfg.enabled ? 'checked' : ''}/> 超时后自动交给电脑</label>
+      <label class="check">超时时间 <input id="autoSeconds" class="sec-input" type="number" min="5" max="180" value="${cfg.seconds}" /> 秒</label>
+    </div>
+    <div class="hint">关闭时仍有服务端兜底超时（约 30 秒）防止卡局；托管只影响你自己的座位。</div>`;
+  const save = el('button', 'primary', '保存');
+  save.onclick = async () => {
+    const enabled = !!body.querySelector('#autoEnabled').checked;
+    const seconds = Math.max(5, Math.min(180, Number(body.querySelector('#autoSeconds').value || 15)));
+    const r = await api(`/api/rooms/${S.roomId}/autoplay`, { token: S.token, enabled, seconds });
+    if (r.ok) {
+      S.autoCfg = { enabled, seconds };
+      try { localStorage.setItem('sg_auto', JSON.stringify(S.autoCfg)); } catch {}
+      renderTable();
+      toast(enabled ? `托管已开启：${seconds} 秒未操作即由电脑代打` : '托管已关闭');
+      mask.remove();
+    } else toast(r.error || '保存失败');
+  };
+  closeRow.insertBefore(save, closeRow.firstChild);
+}
+
+// ---------------- 房间内选将 ----------------
+function openPickGeneral(room) {
+  const pool = (room.pool || []).slice().sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  const used = new Set(room.seats.filter(s => s.index !== S.seat && s.generalId).map(s => s.generalId));
+  const mine = room.seats.find(s => s.index === S.seat)?.generalId;
+  const { mask, body } = modal('选择我的武将', `本房间将池 ${pool.length} 名（按所选武将包 / 自定义将池生成），已被他人选走的不可再选`);
+  if (!pool.length) body.appendChild(el('div', 'hint', '将池为空，请让房主调整武将包或此将池。'));
+  const grid = el('div', 'pool-grid');
+  for (const g of pool) {
+    const taken = used.has(g.id);
+    const it = el('div', 'pool-item' + (taken ? ' dis' : '') + (mine === g.id ? ' on' : ''), g.name);
+    it.title = taken ? '已被其他座位选择' : `${g.kingdom} · ${g.hp} 体力`;
+    if (!taken) {
+      it.onclick = async () => {
+        const r = await api(`/api/rooms/${S.roomId}/pick`, { token: S.token, generalId: g.id });
+        if (r.ok) { mask.remove(); renderRoom(r.room); toast(`已选择 ${g.name}`); }
+        else toast(r.error || '选择失败');
+      };
+    }
+    grid.appendChild(it);
+  }
+  body.appendChild(grid);
+  const reset = el('button', 'ghost', '改为随机');
+  reset.style.marginTop = '10px';
+  reset.onclick = async () => {
+    const r = await api(`/api/rooms/${S.roomId}/pick`, { token: S.token, generalId: '' });
+    if (r.ok) { mask.remove(); renderRoom(r.room); toast('已改为随机分配'); }
+  };
+  body.appendChild(reset);
+}
+
 
 function setLogOpen(open) {
   S.logOpen = !!open;
@@ -128,6 +469,8 @@ function switchView(v) {
   }
   if (v === 'table' && !S.logTouched) S.logOpen = !isMobileLayout();
   $('#btnLog').classList.toggle('hidden', v !== 'table');
+  $('#btnSkills').classList.toggle('hidden', v !== 'table');
+  $('#btnAuto').classList.toggle('hidden', v !== 'table');
   setLogOpen(S.logOpen);
   syncAskOffset();
 }
@@ -139,15 +482,41 @@ function showRoom(room) {
 }
 
 function renderRoom(room) {
+  S.room = room;
   $('#roomTitle').textContent = `房间 ${room.id} · ${room.modeName}（${room.seats.length}/${room.maxSeats}）`;
   const box = $('#roomSeats');
   box.innerHTML = '';
   for (const s of room.seats) {
     const c = el('div', 'seatcard' + (s.online ? '' : ' off'));
-    c.innerHTML = `<div class="n">${esc(s.name)}${s.isAI ? '（电脑）' : ''}</div><div class="g">${esc(s.generalName || '待分配')}</div>`;
+    c.innerHTML = `<div class="n">${esc(s.name)}${s.isAI ? '（电脑）' : ''}${s.index === S.seat ? '（你）' : ''}${s.auto ? ' · 托管' : ''}</div>
+      <div class="g">${esc(s.generalName || '待分配')}</div>`;
     box.appendChild(c);
   }
+  // 房间配置与选将入口
+  const cfg = $('#roomConfig');
+  if (cfg) {
+    cfg.innerHTML = '';
+    const packs = (room.packs || []).map(p => packName(p)).join(' + ');
+    const modeCN = { random: '随机分配', host: '仅房主自选', all: '所有人自选' }[room.pickMode] || '随机分配';
+    const line = el('div', 'hint', `武将包：${packs}　选将：${modeCN}${room.customPool ? `　自定义将池 ${room.customPool.length} 名` : ''}`);
+    cfg.appendChild(line);
+    const my = room.seats.find(s => s.index === S.seat);
+    const canPick = room.status === 'waiting' && (room.pickMode === 'all' || (room.pickMode === 'host' && S.seat === 0));
+    if (canPick) {
+      const b = el('button', 'secondary', my?.generalId ? `我的武将：${generalNameOf(my.generalId)}（点击更换）` : '选择我的武将');
+      b.onclick = () => openPickGeneral(room);
+      cfg.appendChild(b);
+    } else if (room.pickMode === 'host' && S.seat !== 0) {
+      cfg.appendChild(el('div', 'hint', '本房间仅房主可选将，其他座位随机分配。'));
+    } else if (room.pickMode !== 'random' && room.status === 'waiting') {
+      cfg.appendChild(el('div', 'hint', '开局时由系统在各座位随机分配未被选择的武将。'));
+    }
+  }
   $('#btnStart').style.display = room.seats.length && S.seat === 0 ? '' : 'none';
+}
+
+function generalNameOf(id) {
+  return (S.meta?.generals || []).find(g => g.id === id)?.name || id;
 }
 
 function connect() {
@@ -160,9 +529,13 @@ function connect() {
     setTimeout(() => resolve(false), 4000);
   });
   es.onerror = () => { $('#conn').textContent = '连接中断，重试中'; $('#conn').classList.remove('on'); };
-  es.addEventListener('room', (e) => { const room = JSON.parse(e.data); if (room.status === 'waiting') renderRoom(room); });
+  es.addEventListener('room', (e) => { const room = JSON.parse(e.data); S.room = room; if (room.status === 'waiting') renderRoom(room); });
   es.addEventListener('state', (e) => { S.snap = JSON.parse(e.data); if (S.snap?.players) { switchView('table'); renderTable(); } });
   es.addEventListener('log', (e) => { addLog(JSON.parse(e.data)); });
+  es.addEventListener('auto', (e) => {
+    const d = JSON.parse(e.data);
+    if (d.on) { toast('已超时，本次操作由电脑代打（可在「托管」里调整）', 3200); addLog({ text: '⏱ 超时未操作，电脑已代为操作' }); }
+  });
   es.addEventListener('ask', (e) => {
     S.ask = JSON.parse(e.data); S.sel = []; S.targets = [];
     // 手机端战报是全屏抽屉，新询问到达时自动收起，避免挡住操作
@@ -186,11 +559,13 @@ function renderTable() {
   if (me) {
     const canSelf = isTargetSelectable(me);
     const si = $('#selfInfo');
-    si.innerHTML = `你将 <b>${esc(me.generalName)}</b> · ${me.hp}/${me.maxHp} 体力 · 手牌 ${me.handCount} · ${snap.currentIndex === me.seat ? '<b style="color:#d8b46a">你的回合</b>' : '等待中'}${me.chained ? ' · 连环' : ''}`
+    const autoTxt = S.autoCfg?.enabled ? ` · <span style="color:#7f8fa8">托管 ${S.autoCfg.seconds}s</span>` : '';
+    si.innerHTML = `你将 <b>${esc(me.generalName)}</b> · ${me.hp}/${me.maxHp} 体力 · 手牌 ${me.handCount} · ${snap.currentIndex === me.seat ? '<b style="color:#d8b46a">你的回合</b>' : '等待中'}${me.chained ? ' · 连环' : ''}${autoTxt}`
       + (canSelf ? ' · <b style="color:#d8b46a">点此选自己</b>' : '');
     si.classList.toggle('targetable', canSelf);
     si.classList.toggle('picked', canSelf && S.targets.includes(me.seat));
     si.onclick = canSelf ? (() => toggleTarget(me.seat)) : null;
+    renderSelfEquips(me);
     renderHand(me);
   }
   const cur = snap.players[snap.currentIndex];
@@ -211,17 +586,57 @@ function playerCard(p, snap) {
     if (S.targets.includes(p.seat)) c.style.outline = '2px solid #d8b46a';
   }
   const hpDots = Array.from({ length: p.maxHp }, (_, i) => `<i class="hpdot${i < p.hp ? ' on' : ''}"></i>`).join('');
-  const eq = [];
-  for (const v of Object.values(p.equips || {})) if (v) eq.push(cardCN(v));
-  const zone = (p.judgeZone || []).map(z => cardCN(z)).join(' ');
   const roleTag = p.role ? `<div class="role">${roleCN(p.role)}</div>` : '';
+  const markTags = [];
+  for (const [k, v] of Object.entries(p.marks || {})) if (v) markTags.push(`<span class="mark-tag">${esc(k)} ${esc(v)}</span>`);
+  if (p.chained) markTags.push('<span class="mark-tag status">连环</span>');
+  if (p.flags?.jiu) markTags.push(`<span class="mark-tag status">酒 ×${esc(p.flags.jiu)}</span>`);
   c.innerHTML = `${roleTag}
     <div class="pn"><span>${esc(p.name)}</span><span class="pk">${esc(p.kingdom || '')}</span></div>
     <div class="pg">${esc(p.generalName)}</div>
     <div class="hpbar">${hpDots}</div>
-    <div class="meta"><span>手牌 ${p.handCount}</span>${eq.length ? `<span>${eq.join(' ')}</span>` : ''}</div>
-    ${zone ? `<div class="zone">判定区：${zone}</div>` : ''}`;
+    <div class="meta"><span>手牌 ${p.handCount}</span>${typeof p.distance === 'number' ? `<span>距离 ${p.distance}</span>` : ''}</div>
+    <div class="eq-row"></div>`;
+  const eqRow = c.querySelector('.eq-row');
+  let anyEq = false;
+  for (const [slot, cn] of EQUIP_SLOTS) {
+    const card = p.equips?.[slot];
+    if (!card) continue;
+    anyEq = true;
+    const chip = el('span', 'equip-chip', `${esc(S.cards[card.name]?.cn || card.name)}${SUIT_CHAR[card.suit] || ''}${card.num ?? ''}`);
+    bindCardTip(chip, () => card);
+    eqRow.appendChild(chip);
+  }
+  for (const z of p.judgeZone || []) {
+    anyEq = true;
+    const chip = el('span', 'equip-chip judge-chip', `判·${esc(S.cards[z.name]?.cn || z.name)}`);
+    bindCardTip(chip, () => z);
+    eqRow.appendChild(chip);
+  }
+  if (!anyEq) eqRow.remove();
+  if (markTags.length) {
+    const mr = el('div', 'mark-row');
+    mr.innerHTML = markTags.join('');
+    c.appendChild(mr);
+  }
+  // 点武将名可看技能
+  c.querySelector('.pg').style.cursor = 'pointer';
+  c.querySelector('.pg').onclick = (e) => {
+    e.stopPropagation();
+    openOneSkills(p);
+  };
   return c;
+}
+
+// 单人技能速查
+function openOneSkills(p) {
+  const { body } = modal(`${p.name} · ${p.generalName}`, `${p.hp}/${p.maxHp} 体力 · 手牌 ${p.handCount}${p.chained ? ' · 连环' : ''}`);
+  for (const s of p.skills || []) {
+    const item = el('div', 'skill-item');
+    item.innerHTML = `<span class="sn">${esc(s.name)}</span><span class="sd">${esc(s.desc || '')}</span>`;
+    body.appendChild(item);
+  }
+  if (!(p.skills || []).length) body.appendChild(el('div', 'skill-item', '（无技能）'));
 }
 
 function cardCN(c) {
@@ -246,6 +661,7 @@ function renderHand(me) {
     d.innerHTML = `<div class="cs ${red ? 'red' : 'black'}">${{ spade: '♠', heart: '♥', club: '♣', diamond: '♦' }[c.suit] || ''}${c.num}</div>
       <div class="cn">${meta.cn || c.name}</div><div class="ct">${typeCN(meta.type)}</div>`;
     d.onclick = () => clickCard(c);
+    bindCardTip(d, () => c);
     row.appendChild(d);
   }
   renderActions(me);
@@ -315,6 +731,8 @@ function allowedCardIds() {
 }
 
 function clickCard(card) {
+  // 手机长按查看牌面后紧接着的这次点击不算选牌，避免误操作
+  if (Date.now() < S.suppressClickUntil) return;
   const allowed = allowedCardIds();
   if (allowed && !allowed.includes(card.id)) return;
   const a = S.ask;
@@ -448,11 +866,14 @@ function showOverlay(text, winners) {
 function showHelp() {
   const box = $('#overlay');
   box.classList.remove('hidden');
-  box.innerHTML = `<div class="box" style="max-width:520px;text-align:left">
+  box.innerHTML = `<div class="box" style="max-width:560px;text-align:left">
     <h2>玩法</h2>
-    <p>出牌阶段：点手牌选中 → 点击目标玩家 → 点「确定出牌」。<br/>
+    <p>出牌阶段：点手牌选中 → 点击目标玩家（或点自己信息条选自己）→ 点「确定出牌」。<br/>
     响应时（出闪 / 出桃 / 无懈）会弹窗提示，点对应牌即可。<br/>
-    超时由电脑代打，不会卡局。<br/>
+    <b>看牌面说明</b>：电脑上把鼠标停在牌上；手机上长按牌 0.4 秒，即可看到这张牌的完整效果。<br/>
+    <b>技能一览</b>：顶栏「技能」可查看全场武将技能与你自己的标记数量；点对手的武将名也能看他的技能。<br/>
+    <b>装备</b>：自己的武器 / 防具 / 坐骑 / 判定区显示在手牌上方，点一下可看效果；对手的装备显示在对方卡片上。<br/>
+    <b>托管</b>：顶栏「托管」可设「多少秒没操作就交给电脑」，关闭后仍有约 30 秒兜底，避免卡局。<br/>
     模式：身份场、军争、1v1、斗地主、国战、虎牢关。</p>
     <button class="ghost" onclick="document.getElementById('overlay').classList.add('hidden')">关闭</button>
   </div>`;
@@ -462,6 +883,7 @@ window.addEventListener('resize', () => {
   if (!S.logTouched) S.logOpen = S.view === 'table' ? !isMobileLayout() : S.logOpen;
   setLogOpen(S.logOpen);
   syncAskOffset();
+  hideCardTip();
 });
 
 init();

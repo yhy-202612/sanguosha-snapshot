@@ -88,7 +88,9 @@ WantedBy=multi-user.target
     with sftp.file("/etc/systemd/system/sanguosha.service", "w") as fh:
         fh.write(unit)
     sftp.close()
-    run("systemctl daemon-reload && systemctl enable --now sanguosha && sleep 2 && systemctl is-active sanguosha")
+    # 必须 restart：enable --now 对已在跑的服务不会重启，等于新代码不生效
+    run("systemctl daemon-reload && systemctl enable sanguosha && systemctl restart sanguosha "
+        "&& sleep 2 && systemctl is-active sanguosha")
 
     print("== 本机探活")
     run(f"curl -s -o /dev/null -w '%{{http_code}}' http://172.19.0.1:{PORT}/api/meta; echo")

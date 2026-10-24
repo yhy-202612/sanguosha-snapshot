@@ -1,0 +1,16 @@
+[Unit]
+Description=Sanguosha Alt Static Sites (third-party web versions)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/sanguo-alt
+Environment=PORT=8032
+Environment=HOST=172.19.0.1
+Environment=MAP=/sanguo-kevin/:/opt/sanguo-alt/kevin/build
+ExecStart=/usr/bin/node /opt/sanguo-alt/static_multi.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

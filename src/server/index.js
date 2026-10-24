@@ -4,7 +4,8 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { Game } from '../engine/index.js';
-import { CARD_META } from '../engine/cards.js';
+import { CARD_META, cardDesc } from '../engine/cards.js';
+import { getSkill } from '../engine/skill.js';
 import { GENERALS, generalById, KINGDOM_CN, PACK_CN } from '../data/generals.js';
 import { deckEntries } from '../data/deck.js';
 import { getMode, modeList } from '../modes/index.js';
@@ -39,23 +40,53 @@ function newToken() { return randomBytes(10).toString('hex'); }
 
 function publicRoom(room) {
   return {
-    id: room.id, modeId: room.modeId, modeName: getMode(room.modeId).name, pack: room.pack,
+    id: room.id, modeId: room.modeId, modeName: getMode(room.modeId).name,
+    pack: (room.packs || []).join(','), packs: room.packs || [], pickMode: room.pickMode || 'random',
+    customPool: room.customPool || null,
     maxSeats: room.maxSeats, status: room.status,
+    minPlayers: getMode(room.modeId).minPlayers,
     seats: room.seats.map(s => ({
       index: s.index, name: s.name, isAI: s.isAI, generalId: s.generalId,
       generalName: s.generalId ? generalById(s.generalId)?.name : null,
       kingdom: s.generalId ? generalById(s.generalId)?.kingdom : null,
       online: s.isAI || room.clients.has(s.token),
+      auto: !!s.auto?.enabled, autoplaying: !!s.autoplaying,
+      // 房主才能看到别人是否开了托管；这里只回显"是否已选将"
+      picked: !!s.generalId,
     })),
+    // 等待阶段给前端渲染可选武将（选了自定义池就只给池内）
+    pool: room.status === 'waiting' ? roomPool(room).map(g => ({ id: g.id, name: g.name, pack: g.pack, kingdom: KINGDOM_CN[g.kingdom] || g.kingdom, hp: g.hp, skills: g.skills })) : undefined,
   };
 }
 
+// 房间武将池：自定义池优先；否则按选中的包（多选）过滤；池子不够坐满时回退补标准包
+function roomPool(room) {
+  const custom = Array.isArray(room.customPool) ? room.customPool.filter(Boolean) : null;
+  if (custom && custom.length) {
+    const list = GENERALS.filter(g => custom.includes(g.id));
+    if (list.length) return list;
+  }
+  const packs = (Array.isArray(room.packs) && room.packs.length) ? room.packs : ['standard'];
+  let list = GENERALS.filter(g => packs.includes(g.pack));
+  const need = Math.max((room.seats || []).length, 2);
+  if (list.length < need) {
+    const extra = GENERALS.filter(g => g.pack === 'standard' && !packs.includes('standard'));
+    list = [...list, ...extra];
+  }
+  return list.length ? list : [...GENERALS];
+}
+
 // ---------------- 房间 ----------------
-function createRoom({ modeId = 'identity', pack = 'standard', maxSeats = null, hostName = '房主' }) {
+function createRoom({ modeId = 'identity', packs = ['standard'], customPool = null, pickMode = 'random', maxSeats = null, hostName = '房主' }) {
   const mode = getMode(modeId);
   const id = `R${++roomSeq}${randomBytes(2).toString('hex')}`;
+  const packList = (Array.isArray(packs) ? packs : [packs]).filter(p => PACK_CN[p]);
   const room = {
-    id, modeId, pack, maxSeats: maxSeats || mode.maxPlayers,
+    id, modeId,
+    packs: packList.length ? packList : ['standard'],
+    customPool: Array.isArray(customPool) && customPool.length ? customPool : null,
+    pickMode: ['random', 'host', 'all'].includes(pickMode) ? pickMode : 'random',
+    maxSeats: maxSeats || mode.maxPlayers,
     seats: [], game: null, status: 'waiting',
     clients: new Map(), pending: new Map(), reqSeq: 0,
     lastSnapshotAt: 0, createdAt: Date.now(),
@@ -67,12 +98,26 @@ function createRoom({ modeId = 'identity', pack = 'standard', maxSeats = null, h
 
 function addSeat(room, name, isAI) {
   if (room.seats.length >= room.maxSeats) return null;
-  const seat = { index: room.seats.length, name, token: newToken(), isAI, generalId: null };
+  const seat = {
+    index: room.seats.length, name, token: newToken(), isAI, generalId: null,
+    auto: { enabled: false, seconds: 15 }, autoplaying: false,
+  };
   room.seats.push(seat);
   return seat;
 }
 
+// 立刻把最新状态推下去，忽略 120ms 节流。
+// 用途：任何询问（ask）之前必须先刷新状态，否则前端会出现「先能出牌、后看见摸牌」的错序
+// —— 因为 state 被节流延迟、而 ask 是立即发出的。
+function flushState(room) {
+  if (!room.game) return;
+  if (room.stateTimer) { clearTimeout(room.stateTimer); room.stateTimer = null; }
+  room.lastSnapshotAt = Date.now();
+  broadcast(room, 'state');
+}
+
 function sendTo(room, seatIndex, event, data) {
+  if (event === 'ask') flushState(room);
   const seat = room.seats[seatIndex];
   if (!seat) return;
   const res = room.clients.get(seat.token);
@@ -112,7 +157,10 @@ function askSeat(room, seatIndex, req) {
   return new Promise((resolve) => {
     const seat = room.seats[seatIndex];
     const ai = new AIPlayer(seatIndex);
-    const timeout = req.timeout || TURN_TIMEOUT;
+    // 托管：玩家可自行设置「多久没操作就交给电脑」，未开启时用全局兜底超时
+    const autoOn = !!(seat && seat.auto && seat.auto.enabled);
+    const autoSec = autoOn ? Math.max(5, Math.min(180, Number(seat.auto.seconds) || 15)) : 0;
+    const timeout = autoOn ? autoSec * 1000 : (req.timeout || TURN_TIMEOUT);
     const key = `${seatIndex}:${req.id}`;
     const finish = (v) => {
       if (!room.pending.has(key)) return;
@@ -123,6 +171,10 @@ function askSeat(room, seatIndex, req) {
     const timer = setTimeout(async () => {
       if (!room.pending.has(key)) return;
       room.pending.delete(key);
+      if (seat && autoOn) {
+        seat.autoplaying = true;
+        sendTo(room, seatIndex, 'auto', { on: true, reason: 'timeout', prompt: req.prompt || '' });
+      }
       try {
         const fallback = req.kind === 'play'
           ? await ai.askPlay(room.game, room.game.players[seatIndex])
@@ -192,12 +244,16 @@ function startRoom(room) {
   while (room.seats.length < Math.max(mode.minPlayers, 2)) addSeat(room, `电脑${room.seats.length}`, true);
   if (room.seats.length > mode.maxPlayers) return { ok: false, error: `该模式最多 ${mode.maxPlayers} 人` };
 
-  // 选将：从指定包随机分配
+  // 选将：先用玩家已自选的武将（限本房间将池内），其余随机补足
   const rng = makeRng();
-  const packs = room.pack === 'all' ? ['standard', 'jie', 'mou', 'shen', 'ji'] : [room.pack, 'standard'];
-  const pool = GENERALS.filter(g => packs.includes(g.pack));
+  const pool = roomPool(room);
   const used = new Set();
   for (const s of room.seats) {
+    if (s.generalId && pool.some(g => g.id === s.generalId) && !used.has(s.generalId)) used.add(s.generalId);
+    else s.generalId = null;
+  }
+  for (const s of room.seats) {
+    if (s.generalId) continue;
     const cands = pool.filter(g => !used.has(g.id));
     const g = cands.length ? cands[rng.int(cands.length)] : pool[0];
     s.generalId = g.id;
@@ -278,9 +334,12 @@ const server = http.createServer(async (req, res) => {
         generals: GENERALS.map(g => ({
           id: g.id, name: g.name, kingdom: KINGDOM_CN[g.kingdom], hp: g.hp, pack: g.pack,
           skills: g.skills,
+          // 技能中文名 + 描述：大厅/对局内的「查看技能」面板直接用
+          skillsDetail: (g.skills || []).map(id => { const s = getSkill(id); return s ? { id, name: s.name, desc: s.desc || '' } : { id, name: id, desc: '（未实装）' }; }),
         })),
         cards: Object.entries(CARD_META).map(([name, m]) => ({
           name, cn: m.cn, type: m.type, sub: m.sub || null, delayed: !!m.delayed, range: m.range || 0,
+          desc: cardDesc(name),
           target: typeof m.target === 'function'
             ? { min: 1, max: 1, others: true }
             : (m.target || null),
@@ -290,11 +349,23 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/rooms' && req.method === 'POST') {
       const body = await readBody(req);
+      const packsIn = body.packs != null ? body.packs : (body.pack ? [body.pack] : ['standard']);
       const room = createRoom({
-        modeId: body.modeId || 'identity', pack: body.pack || 'standard',
+        modeId: body.modeId || 'identity',
+        packs: packsIn === 'all' ? Object.keys(PACK_CN) : packsIn,
+        customPool: Array.isArray(body.customPool) ? body.customPool.slice(0, 400) : null,
+        pickMode: body.pickMode || 'random',
         maxSeats: body.maxSeats || null, hostName: body.name || '房主',
       });
       const seat = room.seats[0];
+      // 房主先自选武将（pickMode 为 host/all 时）
+      if (body.generalId && room.pickMode !== 'random') {
+        const g = roomPool(room).find(x => x.id === body.generalId);
+        if (g) seat.generalId = g.id;
+      }
+      if (body.autoEnable != null) {
+        seat.auto = { enabled: !!body.autoEnable, seconds: Math.max(5, Math.min(180, Number(body.autoSeconds) || 15)) };
+      }
       if (body.aiSeats) {
         const want = Number(body.aiSeats);
         while (room.seats.length < Math.min(want, room.maxSeats)) addSeat(room, `电脑${room.seats.length}`, true);
@@ -308,6 +379,53 @@ const server = http.createServer(async (req, res) => {
       const room = rooms.get(m[1]);
       if (!room) return json(res, 404, { error: '房间不存在' });
       const action = m[2];
+
+      if (action === 'pick' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (room.status !== 'waiting') return json(res, 400, { error: '对局已开始' });
+        const seat = room.seats.find(s => s.token === body.token);
+        if (!seat) return json(res, 403, { error: '无效令牌' });
+        if (room.pickMode === 'random') return json(res, 400, { error: '本房间为随机分配武将' });
+        if (room.pickMode === 'host' && seat.index !== 0) return json(res, 403, { error: '本房间仅房主可选将' });
+        const gid = String(body.generalId || '');
+        if (!gid) { seat.generalId = null; broadcast(room, 'room', publicRoom(room)); return json(res, 200, { ok: true, room: publicRoom(room) }); }
+        const pool = roomPool(room);
+        if (!pool.some(g => g.id === gid)) return json(res, 400, { error: '该武将不在本房间将池内' });
+        if (room.seats.some(s => s.index !== seat.index && s.generalId === gid)) return json(res, 400, { error: '该武将已被其他座位选择' });
+        seat.generalId = gid;
+        broadcast(room, 'room', publicRoom(room));
+        return json(res, 200, { ok: true, room: publicRoom(room) });
+      }
+
+      if (action === 'config' && req.method === 'POST') {
+        const body = await readBody(req);
+        const seat = room.seats.find(s => s.token === body.token);
+        if (!seat || seat.index !== 0) return json(res, 403, { error: '只有房主可以修改房间设置' });
+        if (room.status !== 'waiting') return json(res, 400, { error: '对局已开始' });
+        if (Array.isArray(body.packs)) {
+          const list = body.packs.filter(p => PACK_CN[p]);
+          room.packs = list.length ? list : ['standard'];
+        }
+        if (body.customPool !== undefined) {
+          room.customPool = Array.isArray(body.customPool) && body.customPool.length ? body.customPool.slice(0, 400) : null;
+        }
+        if (['random', 'host', 'all'].includes(body.pickMode)) room.pickMode = body.pickMode;
+        // 换池子后已选的将可能不在池内，清掉
+        const poolIds = new Set(roomPool(room).map(g => g.id));
+        for (const s of room.seats) if (s.generalId && !poolIds.has(s.generalId)) s.generalId = null;
+        broadcast(room, 'room', publicRoom(room));
+        return json(res, 200, { ok: true, room: publicRoom(room) });
+      }
+
+      if (action === 'autoplay' && req.method === 'POST') {
+        const body = await readBody(req);
+        const seat = room.seats.find(s => s.token === body.token);
+        if (!seat) return json(res, 403, { error: '无效令牌' });
+        seat.auto = { enabled: !!body.enabled, seconds: Math.max(5, Math.min(180, Number(body.seconds) || 15)) };
+        seat.autoplaying = false;
+        broadcast(room, 'room', publicRoom(room));
+        return json(res, 200, { ok: true, auto: seat.auto });
+      }
 
       if (action === 'join' && req.method === 'POST') {
         const body = await readBody(req);
@@ -361,6 +479,7 @@ const server = http.createServer(async (req, res) => {
         const key = `${seat.index}:${body.reqId}`;
         const item = room.pending.get(key);
         if (!item) return json(res, 200, { ok: true, stale: true });
+        seat.autoplaying = false; // 玩家亲自操作，托管状态解除
         let answer = body.answer || null;
         if (body.reqKind === 'play' && answer && answer.cardId) {
           const card = room.game.players[seat.index].hand.find(c => c.id === answer.cardId);

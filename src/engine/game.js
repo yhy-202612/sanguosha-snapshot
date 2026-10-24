@@ -59,6 +59,7 @@ export class Game {
       judgeZone: [], alive: true, role: s.role || null,
       skills: (s.general?.skills || []).map(id => getSkill(id)).filter(Boolean),
       flags: {}, chained: false,
+      marks: {}, // 通用「标记」容器：技能自行增减（如 忍 / 创 / 锦 等），快照下发给前端展示
     }));
     this.players.forEach(p => {
       // 通用限定技/觉醒计数
@@ -315,6 +316,8 @@ export class Game {
       const limit = player.equips.weapon?.name === 'zhuge' ? 99 : 1;
       if ((player.flags.shaUsed || 0) >= limit && !player.flags.shaUnlimited) return { ok: false, reason: '本回合【杀】已用尽' };
     }
+    // 桃在出牌阶段只能给自己用，且必须已受伤（濒死求桃走响应流程，不经过这里）
+    if (effName === 'tao' && player.hp >= player.maxHp) return { ok: false, reason: '体力已满，无需使用【桃】' };
     const rule = meta.target;
     if (!rule) return { ok: true };
     if (typeof rule === 'function') {
@@ -348,6 +351,7 @@ export class Game {
     //   无 self（杀/决斗/过河拆桥…）    → 默认不能以自己为目标
     if (rule.self && !rule.others && !rule.all) cands = cands.filter(p => p === player);
     else if (!rule.self) cands = cands.filter(p => p !== player);
+    if (card.name === 'tao') cands = cands.filter(p => p.hp < p.maxHp); // 满血不能用桃
     if (rule.range) cands = cands.filter(p => this.inAttackRange(player, p));
     if (rule.distance != null) cands = cands.filter(p => this.distance(player, p) <= rule.distance);
     return cands;
@@ -638,17 +642,19 @@ export class Game {
   }
 
   async chooseCardFrom(source, target, { reason = 'choose', includeJudge = true } = {}) {
-    const pool = [
-      ...target.hand.map(c => ({ c, zone: 'hand' })),
-      ...Object.values(target.equips).filter(Boolean).map(c => ({ c, zone: 'equip' })),
-      ...(includeJudge ? target.judgeZone.map(z => ({ c: z.card, zone: 'judge' })) : []),
-    ];
+    // 盲选规范（官方规则）：不得查看对方手牌，只能指定「手牌」这一区域里的一张；
+    // 装备区 / 判定区的牌是公开信息，可以明示牌名让玩家挑。
+    const handOpts = target.hand.map((c, i) => ({ c, zone: 'hand', label: target.hand.length > 1 ? `手牌（第 ${i + 1} 张）` : '手牌' }));
+    const equipOpts = Object.values(target.equips).filter(Boolean).map(c => ({ c, zone: 'equip', label: `装备区：${cardLabel(c)}` }));
+    const judgeOpts = includeJudge ? target.judgeZone.map(z => ({ c: z.card, zone: 'judge', label: `判定区：${cardLabel(z.card)}` })) : [];
+    const pool = [...equipOpts, ...judgeOpts, ...handOpts];
     if (!pool.length) return null;
-    const options = pool.map(x => ({ id: x.c.id, label: cardLabel(x.c), zone: x.zone }));
     const res = await this.ask(source, 'choice', {
-      prompt: `选择 ${target.name} 的一张牌`, options: options.map(o => o.label), optional: false, reason,
+      prompt: `选择 ${target.name} 的一张牌（手牌为暗选，装备区/判定区可见）`,
+      options: pool.map(o => o.label), optional: false, reason,
+      blindHand: handOpts.length > 0,
     });
-    if (!res || res.index == null) return pool[0].c;
+    if (!res || res.index == null || !pool[res.index]) return pool[0].c;
     return pool[res.index].c;
   }
 
@@ -761,12 +767,14 @@ export class Game {
     }
     if (phase === 'play') {
       let guard = 0;
+      let fails = 0;
       while (player.alive && !this.over && guard++ < 300) {
         const res = await this.responder.askPlay(this, player);
         if (!res) break;
         if (res.endPhase) break;
         if (res.skill) {
           await this.useActiveSkill(player, res.skill, res.targets || []);
+          fails = 0;
           continue;
         }
         if (!res.card) break;
@@ -774,7 +782,15 @@ export class Game {
           from: player, card: res.card, targets: res.targets || [],
           asName: res.asName || null, extraCards: res.extraCards || null, reason: 'play',
         });
-        if (!ok) continue;
+        if (!ok) {
+          // 连续选到不能用的牌（如杀已用尽）就收手，避免刷满失败日志、空转到 guard 上限
+          if (++fails >= 5) {
+            await this.log(`${player.name} 连续 5 次无法出牌，结束出牌阶段`);
+            break;
+          }
+          continue;
+        }
+        fails = 0;
       }
       return;
     }
@@ -875,7 +891,10 @@ export class Game {
       result: this.result ? { text: this.result.text, winners: (this.result.winners || []).map(p => p.seat) } : null,
       deckCount: this.deck.length,
       discardCount: this.discardPile.length,
-      pending: this.pending ? { ...this.pending, deadline: this.pending.deadline } : null,
+      // 询问内容只发给当事人：options/cards 里含手牌 id 与暗选信息，广播出去等于亮牌
+      pending: this.pending && (forSeat != null && this.pending.seat === forSeat)
+        ? { kind: this.pending.kind, prompt: this.pending.prompt, deadline: this.pending.deadline, seat: this.pending.seat }
+        : null,
       players: this.players.map(p => ({
         seat: p.seat, id: p.id, name: p.name, isAI: p.isAI,
         generalId: p.generalId, generalName: p.generalName, kingdom: p.kingdom,
@@ -887,7 +906,11 @@ export class Game {
         skills: p.skills.map(s => ({ id: s.id, name: s.name, desc: s.desc })),
         activeSkills: p.seat === forSeat ? this.activeSkillsOf(p) : undefined,
         chained: p.chained,
+        marks: { ...(p.marks || {}) },
         flags: { jiu: p.flags.jiu, shaUsed: p.flags.shaUsed },
+        // 距离信息（前端展示与判断攻击范围用）
+        distance: forSeat != null ? this.distance(this.players[forSeat], p) : undefined,
+        attackRange: forSeat != null ? this.attackRange(this.players[forSeat]) : undefined,
       })),
       logs: this.logs.slice(-80),
     };
