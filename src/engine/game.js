@@ -47,20 +47,36 @@ export class Game {
     this.discardPile = [];
     this.table = []; // 处理区
 
-    this.players = seats.map((s, i) => ({
-      id: s.id, seat: i, name: s.name, isAI: !!s.isAI,
-      generalId: s.general?.id || 'none',
-      generalName: s.general?.name || s.name,
-      gender: s.general?.gender || (FEMALE.has(s.general?.id) ? 'female' : 'male'),
-      kingdom: s.general?.kingdom || 'qun',
-      maxHp: s.general?.hp || 4,
-      hp: s.general?.hp || 4,
-      hand: [], equips: { weapon: null, armor: null, horsePlus: null, horseMinus: null },
-      judgeZone: [], alive: true, role: s.role || null,
-      skills: (s.general?.skills || []).map(id => getSkill(id)).filter(Boolean),
-      flags: {}, chained: false,
-      marks: {}, // 通用「标记」容器：技能自行增减（如 忍 / 创 / 锦 等），快照下发给前端展示
-    }));
+    this.players = seats.map((s, i) => {
+      // 双将：seats 里可传 generals: [g1, g2]（或单个 general）。
+      // 合并口径：技能取并集；体力上限/初始体力取平均值并向上取整；护甲取和。
+      const gens = (Array.isArray(s.generals) && s.generals.length ? s.generals : (s.general ? [s.general] : [])).filter(Boolean);
+      const dual = gens.length > 1;
+      const hpOf = (g) => (typeof g?.hp === 'number' ? g.hp : 4);
+      const armorOf = (g) => (typeof g?.armor === 'number' ? g.armor : 0);
+      const maxHp = gens.length
+        ? (dual ? Math.ceil(gens.reduce((a, g) => a + hpOf(g), 0) / gens.length) : hpOf(gens[0]))
+        : 4;
+      const armor = gens.reduce((a, g) => a + armorOf(g), 0);
+      const skillIds = [];
+      for (const g of gens) for (const id of g.skills || []) if (!skillIds.includes(id)) skillIds.push(id);
+      const main = gens[0];
+      return {
+        id: s.id, seat: i, name: s.name, isAI: !!s.isAI,
+        generalId: main?.id || 'none',
+        generalIds: gens.map(g => g.id),
+        generalName: gens.length ? gens.map(g => g.name).join(' ＆ ') : (s.name || ''),
+        gender: main?.gender || (FEMALE.has(main?.id) ? 'female' : 'male'),
+        kingdom: main?.kingdom || 'qun',
+        maxHp, hp: maxHp,
+        armor, armorMax: armor, // 护甲：受到伤害时先扣护甲
+        hand: [], equips: { weapon: null, armor: null, horsePlus: null, horseMinus: null },
+        judgeZone: [], alive: true, role: s.role || null,
+        skills: skillIds.map(id => getSkill(id)).filter(Boolean),
+        flags: {}, chained: false,
+        marks: {}, // 通用「标记」容器：技能自行增减（如 忍 / 创 / 锦 等），快照下发给前端展示
+      };
+    });
     this.players.forEach(p => {
       // 通用限定技/觉醒计数
       p.flags = {};
@@ -228,12 +244,21 @@ export class Game {
   async damage({ from, to, amount = 1, nature = 'normal', card = null, reason = 'damage' }) {
     if (!to || !to.alive) return;
     const data = { self: to, from, amount, nature, card, reason, canceled: false };
-    // 藤甲
-    const armor = to.equips.armor;
-    if (armor && armor.name === 'tengjia' && nature === 'fire') data.amount += 1;
-    if (armor && armor.name === 'baiyin' && data.amount > 1) data.amount = 1;
+    // 防具（装备区的 armor 槽）
+    const armorCard = to.equips.armor;
+    if (armorCard && armorCard.name === 'tengjia' && nature === 'fire') data.amount += 1;
+    if (armorCard && armorCard.name === 'baiyin' && data.amount > 1) data.amount = 1;
     await this.trigger('damage.before', data);
     if (data.canceled || data.amount <= 0) { await this.log(`${to.name} 免受伤害`); return; }
+    // 护甲（双将初始护甲取和）：先扣护甲，护甲不足再扣体力
+    if (to.armor > 0) {
+      const absorbed = Math.min(to.armor, data.amount);
+      to.armor -= absorbed;
+      data.amount -= absorbed;
+      data.armorAbsorbed = absorbed;
+      await this.log(`${to.name} 的护甲抵挡 ${absorbed} 点伤害（护甲剩余 ${to.armor}）`);
+      if (data.amount <= 0) { await this.trigger('damage.after', data); return; }
+    }
     to.hp -= data.amount;
     await this.log(`${to.name} 受到 ${data.amount} 点${nature === 'fire' ? '火焰' : nature === 'thunder' ? '雷电' : ''}伤害（${to.hp}/${to.maxHp}）${from ? '，来源：' + from.name : ''}`);
     await this.trigger('damage.after', data);
@@ -898,7 +923,8 @@ export class Game {
       players: this.players.map(p => ({
         seat: p.seat, id: p.id, name: p.name, isAI: p.isAI,
         generalId: p.generalId, generalName: p.generalName, kingdom: p.kingdom,
-        hp: p.hp, maxHp: p.maxHp, alive: p.alive,
+        generalIds: p.generalIds || [p.generalId],
+        hp: p.hp, maxHp: p.maxHp, armor: p.armor || 0, armorMax: p.armorMax || 0, alive: p.alive,
         role: hideRole && p.role !== 'lord' && p.seat !== forSeat ? null : p.role,
         handCount: p.hand.length,
         hand: this.config.openHand || p.seat === forSeat ? p.hand : undefined,

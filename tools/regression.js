@@ -4,6 +4,7 @@
 import '../src/skills/index.js';
 import { Game, CARD_META } from '../src/engine/index.js';
 import { deckEntries } from '../src/data/deck.js';
+import { generalById } from '../src/data/generals.js';
 
 let pass = 0, fail = 0;
 const bad = [];
@@ -167,6 +168,40 @@ function makeGame(skills = [[], [], []], responder = null) {
   ok(/判定区：乐不思蜀/.test(txt), '判定区的牌应明示牌名');
   ok(!/杀|桃/.test(txt), `手牌不得泄漏牌名（实际选项：${txt}）`);
   ok(seen.filter(x => /^手牌/.test(x)).length === 2, '手牌应有 2 个暗选选项');
+}
+
+// 8. 双将：体力上限取平均向上取整、护甲取和、技能取并集；护甲先于体力被扣
+{
+  const seats = [
+    { id: 's0', name: 'D0', isAI: true, generals: [generalById('caocao'), generalById('simayi')] },
+    { id: 's1', name: 'D1', isAI: true, general: generalById('sunquan') },
+  ];
+  const g = new Game({
+    seats, mode: MODE, seed: 7,
+    responder: { ask: async () => null, askPlay: async () => ({ endPhase: true }) },
+    deckEntries: deckEntries('standard'),
+  });
+  const p0 = g.players[0];
+  ok(p0.maxHp === 4, `双将体力上限应 ceil((4+3)/2)=4，实际 ${p0.maxHp}`);
+  ok(p0.hp === p0.maxHp, '双将初始体力应等于上限');
+  const sk = p0.skills.map(s => s.id);
+  ok(sk.includes('jianxiong') && sk.includes('fankui'), `双将技能应取并集，实际 ${sk.join(',')}`);
+  ok(p0.generalName.includes('曹操') && p0.generalName.includes('司马懿'), `双将名应拼接，实际 ${p0.generalName}`);
+  ok(p0.generalIds.length === 2, '双将应有两个 generalId');
+  // 护甲：2 点护甲吸收 1+1 点伤害，剩余 1 点扣体力
+  p0.armor = 2;
+  const hp0 = p0.hp;
+  g.responder = { ask: async () => null, askPlay: async () => ({ endPhase: true }) };
+  g.trigger = async () => {};
+  g.triggerSync = () => {};
+  g.dying = async () => {};
+  await g.damage({ from: g.players[1], to: p0, amount: 1 });
+  ok(p0.armor === 1 && p0.hp === hp0, `1 点伤害应全被护甲吸收（护甲 ${p0.armor}/体力 ${p0.hp}）`);
+  await g.damage({ from: g.players[1], to: p0, amount: 3 });
+  ok(p0.armor === 0 && p0.hp === hp0 - 2, `3 点伤害应吸 1 扣 2（护甲 ${p0.armor}/体力 ${p0.hp}）`);
+  const snap = g.snapshot(0);
+  ok(typeof snap.players[0].armor === 'number', '快照应下发 armor');
+  ok((snap.players[0].generalIds || []).length === 2, '快照应下发 generalIds');
 }
 
 console.log(`\n回归用例：通过 ${pass} / 失败 ${fail}`);
