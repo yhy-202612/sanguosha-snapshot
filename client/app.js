@@ -619,13 +619,25 @@ function playerCard(p, snap) {
     mr.innerHTML = markTags.join('');
     c.appendChild(mr);
   }
-  // 点武将名可看技能
-  c.querySelector('.pg').style.cursor = 'pointer';
-  c.querySelector('.pg').onclick = (e) => {
-    e.stopPropagation();
-    openOneSkills(p);
-  };
+  // 查看该武将技能：电脑=左键长按 500ms 或右键；手机=长按 480ms（单击不触发，避免误开）
+  attachSkillTrigger(c.querySelector('.pg'), p);
   return c;
+}
+
+// 长按/右键唤醒「单将技能」面板（手机长按、电脑左键长按或右键）
+function attachSkillTrigger(node, p) {
+  if (!node) return;
+  node.title = '长按（电脑可右键）查看该武将技能';
+  let timer = null;
+  const open = () => { clearTimeout(timer); timer = null; openOneSkills(p); };
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  node.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    cancel();
+    timer = setTimeout(open, e.pointerType === 'mouse' ? 500 : 480);
+  });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel', 'pointermove']) node.addEventListener(ev, cancel);
+  node.addEventListener('contextmenu', (e) => { e.preventDefault(); open(); });
 }
 
 // 单人技能速查
@@ -871,7 +883,7 @@ function showHelp() {
     <p>出牌阶段：点手牌选中 → 点击目标玩家（或点自己信息条选自己）→ 点「确定出牌」。<br/>
     响应时（出闪 / 出桃 / 无懈）会弹窗提示，点对应牌即可。<br/>
     <b>看牌面说明</b>：电脑上把鼠标停在牌上；手机上长按牌 0.4 秒，即可看到这张牌的完整效果。<br/>
-    <b>技能一览</b>：顶栏「技能」可查看全场武将技能与你自己的标记数量；点对手的武将名也能看他的技能。<br/>
+    <b>技能一览</b>：顶栏「技能」可查看全场武将技能与你自己的标记数量；<b>长按</b>对手的武将名也能单独看他的技能（电脑上左键长按 0.5 秒，或直接右键）。<br/>
     <b>装备</b>：自己的武器 / 防具 / 坐骑 / 判定区显示在手牌上方，点一下可看效果；对手的装备显示在对方卡片上。<br/>
     <b>托管</b>：顶栏「托管」可设「多少秒没操作就交给电脑」，关闭后仍有约 30 秒兜底，避免卡局。<br/>
     模式：身份场、军争、1v1、斗地主、国战、虎牢关。</p>

@@ -109,14 +109,25 @@ def run():
         check(page.evaluate("() => window.__SG.autoCfg.seconds") == 25, "托管秒数未保存到本地状态")
         check("托管 25s" in page.inner_text("#selfInfo"), f"自身信息条未显示托管：{page.inner_text('#selfInfo')[:60]}")
 
-        # 9) 对手卡片装备 / 点武将名看技能
+        # 9) 对手卡片装备 / 右键（或长按）武将名看技能
         pg = page.locator(".pcard .pg").first
-        pg.click()
+        pg.click(button="right")
         page.wait_for_selector(".modal-mask")
         check("技能" not in page.inner_text(".modal-box h3") or True, "")
         one_txt = page.inner_text(".modal-box")
         check("体力" in one_txt, f"单将技能弹窗内容异常：{one_txt[:60]}")
         page.click(".modal-mask .close-row button")
+
+        # 9b) 左键长按 500ms 也应打开
+        box2 = pg.bounding_box()
+        page.mouse.move(box2["x"] + box2["width"] / 2, box2["y"] + box2["height"] / 2)
+        page.mouse.down()
+        page.wait_for_timeout(750)
+        opened = page.locator(".modal-mask").count() >= 1
+        page.mouse.up()
+        check(opened, "电脑端左键长按未打开单将技能")
+        if opened:
+            page.click(".modal-mask .close-row button")
 
         page.close()
 
