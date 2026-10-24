@@ -1,0 +1,15 @@
+{
+  "name": "sanguosha-online",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "在线三国杀（服务端权威引擎 + SSE 同步 + 六模式）",
+  "scripts": {
+    "start": "node src/server/index.js",
+    "dev": "node tools/dev.js",
+    "test": "node tools/selfcheck.js",
+    "sim": "node tools/simulate.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {}
+}
