@@ -54,6 +54,18 @@ const EX = [
   ['bingliang', 'sT'], ['bingliang', 'cT'],
   ['wuxie', 'sQ'], ['wuxie', 'sK'], ['wuxie', 'cQ'],
   ['hanbing', 's2'], ['guding', 'sA'], ['tengjia', 's2'], ['tengjia', 'c2'], ['baiyin', 'd2'], ['zixing', 'sK'],
+  // 属性【杀】：火杀 5 / 雷杀 5（牌名仍为 sha，带 nature）
+  ['sha', 'h4', 'fire'], ['sha', 'h7', 'fire'], ['sha', 'hT', 'fire'], ['sha', 'd4', 'fire'], ['sha', 'd5', 'fire'],
+  ['sha', 'c4', 'thunder'], ['sha', 'c5', 'thunder'], ['sha', 'c6', 'thunder'], ['sha', 'c8', 'thunder'], ['sha', 'd6', 'thunder'],
+  // 宝物与特殊武器：太平要术 / 木牛流马 / 霹雳车
+  ['taiping', 'd6'], ['taiping', 'h6'],
+  ['muniu', 'd5'], ['muniu', 'c7'],
+  ['piliche', 'dJ'],
+  // 新锦囊：兵临城下 / 奇正相生
+  ['binglin', 's3'], ['binglin', 'd9'],
+  ['qizheng', 'hJ'], ['qizheng', 'cJ'],
+  // 弩炮（自定义配件牌）不常驻牌堆：仅当场上有【巧工】（天工·诸葛亮）时由技能加入牌堆
+  ['zhuque', 'd4'],   // 朱雀羽扇（巧武器之一，天工·诸葛亮【巧工】可从牌堆取用）
 ];
 
 export const DECKS = {
@@ -62,7 +74,8 @@ export const DECKS = {
 };
 
 function expand(list) {
-  return list.map(([name, code]) => ({ name, ...parse(code) }));
+  // 第三项为属性（'fire' / 'thunder'）：属性【杀】的牌名仍是 sha，靠 nature 区分，界面显示「火杀」「雷杀」
+  return list.map(([name, code, nature]) => ({ name, ...parse(code), ...(nature ? { nature } : {}) }));
 }
 
 export function deckEntries(kind = 'standard') {

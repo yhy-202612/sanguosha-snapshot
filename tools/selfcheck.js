@@ -17,7 +17,30 @@ function ok(cond, msg) {
 const std = deckEntries('standard');
 const ex = deckEntries('ex');
 ok(std.length === 108, `标准包应为 108 张，实际 ${std.length}`);
-ok(ex.length === 160, `标准+军争应为 160 张，实际 ${ex.length}`);
+
+// 身份局：每个座位只能看到自己的身份（除自己外 role 必须为空）
+{
+  const g = new Game({ seats: [{ id:'a', name:'A', isAI:true, general: generalById('sunquan') },
+                               { id:'b', name:'B', isAI:true, general: generalById('caocao') },
+                               { id:'c', name:'C', isAI:true, general: generalById('liubei') }],
+                       mode: getMode('identity'), seed: 7,
+                       responder: { askPlay: async () => ({ endPhase: true }), ask: async () => null },
+                       deckEntries: deckEntries('standard'), config: { timeout: 1000 } });
+  g.onState = () => {};
+  for (let seat = 0; seat < 3; seat++) {
+    const snap = g.snapshot(seat);
+    const mine = snap.players[seat].role;
+    const others = snap.players.filter((_, i) => i !== seat).map(x => x.role);
+    ok(!!mine, `身份局 seat${seat} 应能看到自己的身份`);
+    // 主公身份明置（规则如此），其余身份对他人必须为空
+    ok(others.every(r => !r || r === 'lord'), `身份局 seat${seat} 不应看到他人身份（主公除外），实际 ${JSON.stringify(others)}`);
+  }
+  g.over = true;
+  const snap2 = g.snapshot(0);
+  ok(snap2.players.every(x => !!x.role), '对局结束后应揭示全员身份');
+}
+
+ok(ex.length === 180, `标准+军争应为 180 张（含朱雀羽扇/属性杀/三件装备/两张新锦囊；弩炮由【巧工】临时加入），实际 ${ex.length}`);
 ok(std.every(c => CARD_META[c.name]), '标准包存在未知牌名');
 ok(ex.every(c => CARD_META[c.name]), '军争包存在未知牌名');
 const shaCount = std.filter(c => c.name === 'sha').length;

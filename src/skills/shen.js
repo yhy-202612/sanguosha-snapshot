@@ -1,8 +1,8 @@
 // 神将技能（12 位神将 / 19 个技能）。简化口径见各 desc。
-import { defineSkill, getSkill } from '../engine/skill.js';
+import { defineSkill, getSkill, effSkills } from '../engine/skill.js';
 import { CARD_META, isRed, cardLabel } from '../engine/cards.js';
 
-const has = (p, id) => p.skills.some(s => s.id === id);
+const has = (p, id) => effSkills(p).some(s => s.id === id);
 
 // ---------- 武魂 ----------
 defineSkill({
@@ -48,7 +48,7 @@ defineSkill({
 defineSkill({
   id: 'kuangfeng', name: '狂风', desc: '出牌阶段限一次，你可以弃一枚「星」，令一名角色获得「狂风」直到你的下回合开始；其受到的火焰伤害 +1。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃一枚「星」，令一名角色受到的火焰伤害 +1',
     async effect(ctx) {
       const p = ctx.self;
@@ -72,7 +72,7 @@ defineSkill({
 defineSkill({
   id: 'dawu', name: '大雾', desc: '出牌阶段限一次，你可以弃 X 枚「星」（X≥1），令至多 X 名角色获得「大雾」直到你的下回合开始；其受到的非雷电伤害 -1。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃若干「星」，令等量角色受到的非雷电伤害 -1',
     async effect(ctx) {
       const p = ctx.self;
@@ -113,16 +113,15 @@ defineSkill({
 defineSkill({
   id: 'wqian', name: '无前', desc: '出牌阶段限一次，你可以弃一张牌，令一名其他角色本回合不能使用【闪】（简化：替代「技能失效」）。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃一张牌，令一名角色本回合不能使用【闪】',
     async effect(ctx) {
       const p = ctx.self;
       if (!p.hand.length) return;
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: ctx.game.alive().filter(x => x !== p), prompt: '【无前】：选择一名角色' });
       if (!ts.length) return;
-      const c = await ctx.ask.card(p, { prompt: '【无前】：弃一张牌', optional: false });
+      const c = await ctx.ask.card(p, { prompt: '【无前】：弃一张牌', optional: false, reason: 'wqian' });
       if (!c) return;
-      await ctx.discard(p, [c], { reason: 'wqian' });
       ts[0].flags.noShanTurn = ctx.game.turnCount;
       await ctx.log(`${ts[0].name} 本回合不能使用【闪】`);
     },
@@ -147,8 +146,8 @@ defineSkill({
       if (p.hand.length) {
         const c = await ctx.ask.card(p, { prompt: '【归心】：将一张手牌置于牌堆顶（可取消）', optional: true });
         if (c) {
-          const i = p.hand.indexOf(c);
-          if (i >= 0) p.hand.splice(i, 1);
+          // 置于牌堆顶前先从所有区域摘下（该牌可能因历史双存同时留在弃牌堆）
+          await ctx.game.takeCard(c);
           ctx.game.deck.push(c);
           await ctx.log(`${p.name} 将一张牌置于牌堆顶`);
         }
@@ -275,7 +274,7 @@ defineSkill({
 defineSkill({
   id: 'gongxin', name: '攻心', desc: '出牌阶段限一次，你可以令一名其他角色弃置一张红桃手牌（简化：由其自己选择）。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '令一名其他角色弃置一张红桃手牌',
     async effect(ctx) {
       const p = ctx.self;
@@ -286,8 +285,7 @@ defineSkill({
       const t = ts[0];
       const hearts = t.hand.filter(c => c.suit === 'heart');
       await ctx.game.revealCards(hearts, { to: ctx.game.alive(), reason: '攻心' });
-      const c = await ctx.ask.card(t, { filter: { suit: ['heart'] }, prompt: '【攻心】：弃置一张红桃手牌', optional: false });
-      if (c) await ctx.discard(t, [c], { reason: 'gongxin' });
+      await ctx.ask.card(t, { filter: { suit: ['heart'] }, prompt: '【攻心】：弃置一张红桃手牌', optional: false, reason: 'gongxin' });
     },
   },
 });
@@ -339,6 +337,9 @@ defineSkill({
   id: 'junlve', name: '军略', desc: '锁定技。你每使用或打出一张装备牌，获得一枚「略」标记。',
   triggers: [{
     on: 'equip.change', who: 'self', optional: false,
+    // ★SG029：引擎现在会在「失去装备」时补派 equip.change（lost:true / card:null），
+    //   本技能是「使用或打出装备牌后 +1 略」，失去装备不能算 → 必须要求 d.card 存在
+    filter: (d) => !!d.card && d.lost !== true,
     async effect(ctx) {
       const p = ctx.self;
       p.flags.lve = (p.flags.lve || 0) + 1;
@@ -350,7 +351,7 @@ defineSkill({
 defineSkill({
   id: 'cuike', name: '摧克', desc: '出牌阶段限一次，你可以弃两枚「略」，对一名角色造成 1 点伤害。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃两枚「略」，对一名角色造成 1 点伤害',
     async effect(ctx) {
       const p = ctx.self;
@@ -367,7 +368,7 @@ defineSkill({
 defineSkill({
   id: 'jieying', name: '劫营', desc: '出牌阶段限一次，你可以弃一张牌，获得一名其他角色装备区里的一张牌。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃一张牌，获得一名角色装备区的一张牌',
     async effect(ctx) {
       const p = ctx.self;
@@ -375,9 +376,8 @@ defineSkill({
       if (!cands.length || !p.hand.length) return;
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【劫营】：选择一名角色' });
       if (!ts.length) return;
-      const c = await ctx.ask.card(p, { prompt: '【劫营】：弃一张牌', optional: false });
+      const c = await ctx.ask.card(p, { prompt: '【劫营】：弃一张牌', optional: false, reason: 'jieying' });
       if (!c) return;
-      await ctx.discard(p, [c], { reason: 'jieying' });
       const t = ts[0];
       const eq = Object.values(t.equips).filter(Boolean);
       const idx = await ctx.ask.choose(p, eq.map(x => cardLabel(x)), { prompt: '【劫营】：获得哪张装备？' });

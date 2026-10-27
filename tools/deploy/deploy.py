@@ -88,6 +88,12 @@ WantedBy=multi-user.target
     with sftp.file("/etc/systemd/system/sanguosha.service", "w") as fh:
         fh.write(unit)
     sftp.close()
+    # 重启前先给在线房间广播维护提示（房间壳会落盘、重启后自动恢复，玩家不会被无声踢出）
+    print("== 预重启通知")
+    run(f"curl -s -m 5 -X POST http://172.19.0.1:{PORT}/api/admin/notice "
+        f"-H 'Content-Type: application/json' "
+        f"-d '{{\"text\":\"服务器即将更新（约 5 秒），房间会自动保留，稍候会自动重连\",\"seconds\":8}}' || true")
+    run("sleep 1")
     # 必须 restart：enable --now 对已在跑的服务不会重启，等于新代码不生效
     run("systemctl daemon-reload && systemctl enable sanguosha && systemctl restart sanguosha "
         "&& sleep 2 && systemctl is-active sanguosha")

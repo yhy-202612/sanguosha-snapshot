@@ -3,6 +3,21 @@
 // 与现行 OL 改版冲突处，按任务单点名的 2013 界限突破口径实现，详见 deliver/SG002/MANIFEST.md。
 import { defineSkill } from '../engine/skill.js';
 import { CARD_META, isRed, cardLabel } from '../engine/cards.js';
+import { VIRTUAL_RULES } from '../engine/game.js';
+
+// ---------- 转化规则补登（界关羽/界赵云 的「使用」方向） ----------
+// 引擎内置的 VIRTUAL_RULES 只登记了标准包的 wusheng / longdan，界系列技能 id 不同，
+// 导致「使用」阶段 canUse(…, asName) 一律返回「没有可将此牌当作【杀】使用的技能」，
+// 界关羽/界赵云只能在响应时（respond.need）转化、出牌阶段无法转化（AI 也因此不会用）。
+// 这里补上同名规则；注意 EXTRA_VIRTUAL_RULES 的 push 时机依赖「技能先于 game.js 加载」，
+// 而 src/server 的入口是先加载引擎再加载技能，所以直接 push 进 live 数组 VIRTUAL_RULES 才可靠。
+const addVirtualRule = (rule) => {
+  if (!VIRTUAL_RULES.some(r => r.skill === rule.skill && r.as === rule.as)) VIRTUAL_RULES.push(rule);
+};
+addVirtualRule({ skill: 'jie_wusheng', as: 'sha', test: (cards) => cards?.length === 1 && isRed(cards[0]) });
+addVirtualRule({ skill: 'jie_longdan', as: 'sha', test: (cards) => cards?.length === 1 && cards[0]?.name === 'shan' });
+addVirtualRule({ skill: 'jie_longdan', as: 'shan', test: (cards) => cards?.length === 1 && cards[0]?.name === 'sha' });
+addVirtualRule({ skill: 'jie_longdan', as: 'tao', test: (cards) => cards?.length === 1 && cards[0]?.name === 'jiu' });
 
 // ---------- 工具 ----------
 function takeFromZones(game, card) {
@@ -207,15 +222,17 @@ defineSkill({
   ],
 });
 
-// 界甄姬 · 洛神：准备阶段可重复判定，黑色则获得此牌并可以继续（官方“不计入手牌上限”需引擎支持，暂未实现）。
+// 界甄姬 · 洛神：准备阶段可重复判定，黑色则获得此牌并可以继续；
+// 以此法获得的牌本回合不计入手牌上限 → player.flags.handLimit 临时 +N（回合结束时归零）。
 defineSkill({
   id: 'jie_luoshen', name: '洛神',
-  desc: '准备阶段，你可以进行判定：若结果为黑色，你获得此牌，然后你可以重复此流程。',
+  desc: '准备阶段，你可以进行判定：若结果为黑色，你获得此牌，然后你可以重复此流程。以此法获得的牌本回合不计入手牌上限。',
   triggers: [{
     on: 'phase.begin', who: 'self', optional: false,
     filter: (d) => d.phase === 'prepare',
     async effect(ctx) {
-      let guard = 0;
+      const p = ctx.self, base = p.flags.handLimit || 0;
+      let gained = 0, guard = 0;
       while (guard++ < 12) {
         const yes = await ctx.ask.confirm(ctx.self, '【洛神】：是否进行判定？');
         if (!yes) break;
@@ -225,7 +242,20 @@ defineSkill({
         const i = ctx.game.discardPile.indexOf(c);
         if (i >= 0) ctx.game.discardPile.splice(i, 1);
         await ctx.gain(ctx.self, [c], { reason: 'luoshen' });
+        gained += 1;
+        p.flags.luoshenLimit = gained;          // 记录本回合由洛神产生的上限加成
+        p.flags.handLimit = base + gained;
       }
+      if (gained > 0) await ctx.log(`【洛神】：以此法获得的 ${gained} 张牌本回合不计入手牌上限（手牌上限 +${gained}）`);
+    },
+  }, {
+    // 回合结束还原手牌上限加成
+    on: 'turn.end', who: 'self', optional: false,
+    filter: (d) => (d.player.flags.luoshenLimit || 0) > 0,
+    async effect(ctx) {
+      const p = ctx.self, n = p.flags.luoshenLimit || 0;
+      p.flags.handLimit = Math.max(0, (p.flags.handLimit || 0) - n);
+      p.flags.luoshenLimit = 0;
     },
   }],
 });
@@ -291,7 +321,10 @@ defineSkill({
   },
 });
 
-// 界关羽 · 武圣：可以将一张红色牌当【杀】使用或打出；方块【杀】无距离限制（后者需引擎支持，暂未实现）。
+// 界关羽 · 武圣：可以将一张红色牌当【杀】使用或打出（「使用」方向由文首补登的 VIRTUAL_RULES 支持）。
+// 官方另有「你使用的方块【杀】无距离限制」——引擎 canUse 在进入任何技能钩子之前就已完成
+// 攻击范围校验，且只认 player.flags.freeRangeTurn（整回合全牌无距离），无「按牌校验距离」的钩子，
+// 故该半句仍需引擎支持（见交付说明）。
 defineSkill({
   id: 'jie_wusheng', name: '武圣',
   desc: '你可以将一张红色牌当【杀】使用或打出。',
@@ -341,7 +374,8 @@ defineSkill({
 
 // ================= 批次 B =================
 
-// 界赵云 · 龙胆：杀/闪互换，酒可当桃（桃当酒需引擎 VIRTUAL_RULES 支持，暂未实现）。
+// 界赵云 · 龙胆：杀/闪互换、酒可当桃。「使用」方向由文首补登的 VIRTUAL_RULES 支持，
+// 「打出/响应」方向由 respond.need 支持（酒当桃走前者：濒死求桃与出牌阶段使用桃都会先过 canUse）。
 defineSkill({
   id: 'jie_longdan', name: '龙胆',
   desc: '你可以将一张【杀】当【闪】、【闪】当【杀】、【酒】当【桃】使用或打出。',
@@ -417,20 +451,40 @@ async function guanxing(ctx, isRepeat) {
     const idx = await ctx.ask.choose(p, [`${cardLabel(c)} → 置于牌堆顶`, `${cardLabel(c)} → 置于牌堆底`], { prompt: '【观星】：选择放置位置', reason: 'guanxing' });
     if (idx === 1) toBottom.push(c); else toTop.push(c);
   }
-  ctx.game.deck.push(...toTop.slice().reverse());
-  ctx.game.deck.unshift(...toBottom.slice().reverse());
+  // 牌堆顶在数组末尾：top / toTop / toBottom 的遍历序都是「底→顶」，直接顺序压回即可保持相对顺序
+  ctx.game.deck.push(...toTop);
+  ctx.game.deck.unshift(...toBottom);
   if (!isRepeat && toTop.length === 0) p.flags.jieGuanxingAgain = true;
   await ctx.log(`${p.name} 发动【观星】，调整了 ${top.length} 张牌（顶 ${toTop.length} / 底 ${toBottom.length}）`);
 }
 
-// 界黄月英 · 集智：使用非转化锦囊时摸一张（官方“手牌上限 +1”需引擎支持，暂未实现）。
+// 界黄月英 · 集智：使用非转化锦囊时摸一张；若摸到的牌是基本牌，你可以弃置此牌，然后本回合手牌上限+1
+// （OL 界黄月英原文；手牌上限用 player.flags.handLimit 实现，回合结束还原）。
 defineSkill({
   id: 'jie_jizhi', name: '集智',
-  desc: '当你使用一张非转化的普通锦囊牌时，你可以摸一张牌。',
+  desc: '当你使用一张非转化的普通锦囊牌时，你可以摸一张牌。若你以此法摸到的牌为基本牌，你可以弃置此牌，然后本回合手牌上限+1。',
   triggers: [{
     on: 'card.use.before', who: 'self', optional: true,
     filter: (d) => d.card && d.card.type === 'trick' && !d.card.__src && !CARD_META[d.card.name]?.delayed,
-    async effect(ctx) { await ctx.draw(ctx.self, 1, { reason: 'jizhi' }); },
+    async effect(ctx) {
+      const p = ctx.self;
+      const got = await ctx.draw(p, 1, { reason: 'jizhi' });
+      const c = Array.isArray(got) ? got[0] : null;
+      if (!c || CARD_META[c.name]?.type !== 'basic') return;
+      if (!(await ctx.ask.confirm(p, `【集智】：是否弃置刚摸到的 ${cardLabel(c)}，令本回合手牌上限 +1？`))) return;
+      await ctx.discard(p, [c], { reason: 'jizhi' });
+      p.flags.jizhiLimit = (p.flags.jizhiLimit || 0) + 1;
+      p.flags.handLimit = (p.flags.handLimit || 0) + 1;
+      await ctx.log(`【集智】：${p.name} 弃置 ${cardLabel(c)}，本回合手牌上限 +1（+${p.flags.jizhiLimit}）`);
+    },
+  }, {
+    on: 'turn.end', who: 'self', optional: false,
+    filter: (d) => (d.player.flags.jizhiLimit || 0) > 0,
+    async effect(ctx) {
+      const p = ctx.self, n = p.flags.jizhiLimit || 0;
+      p.flags.handLimit = Math.max(0, (p.flags.handLimit || 0) - n);
+      p.flags.jizhiLimit = 0;
+    },
   }],
 });
 
@@ -439,7 +493,7 @@ defineSkill({
   id: 'jie_zhiheng', name: '制衡',
   desc: '出牌阶段限一次，你可以弃置任意张牌，然后摸等量的牌；若你以此法弃置了所有手牌，你额外摸一张牌。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置任意张牌并摸等量的牌',
     async effect(ctx) {
       const p = ctx.self;
@@ -477,7 +531,7 @@ defineSkill({
   id: 'jie_fanjian', name: '反间',
   desc: '出牌阶段限一次，你可以展示并交给一名其他角色一张手牌，然后其选择一项：1.展示所有手牌，弃置与此牌花色相同的牌；2.失去 1 点体力。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '交给一名角色一张手牌，由其选择弃同花色牌或失去体力',
     async effect(ctx) {
       const p = ctx.self;
@@ -515,11 +569,11 @@ defineSkill({
       const used = ctx.data.used || [];
       const cands = ctx.game.alive().filter(x => x !== p && !used.includes(x) && ctx.inRange(p, x));
       if (!cands.length) return;
+      // respondCard 已把牌打出并置入弃牌堆，无需再次 discard
       const c = await ctx.ask.card(p, { prompt: '【流离】：弃置一张牌，转移此【杀】', optional: true, reason: 'liuli' });
       if (!c) return;
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【流离】：将【杀】转移给谁？' });
       if (!ts.length) return;
-      await ctx.discard(p, [c], { reason: 'liuli' });
       ctx.data.target = ts[0];
       ctx.data.redirected = true;
       await ctx.log(`${p.name} 发动【流离】，将【杀】转移给 ${ts[0].name}`);
@@ -595,7 +649,7 @@ defineSkill({
       p.flags.jieQingnangTurn = ctx.game.turnCount;
       const used = [];
       let guard = 0;
-      while (guard++ < 8) {
+      while (guard++ < 4) {
         const cands = ctx.game.alive().filter(x => x.hp < x.maxHp && !used.includes(x.id));
         if (!cands.length || !p.hand.length) break;
         const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【青囊】：选择一名受伤角色' });
@@ -634,7 +688,7 @@ defineSkill({
   id: 'jie_lijian', name: '离间',
   desc: '出牌阶段限一次，你可以弃置一张牌，令一名男性角色视为对另一名男性角色使用一张【决斗】（不能被【无懈可击】抵消）。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置一张牌，令两名男性角色决斗',
     async effect(ctx) {
       const p = ctx.self;
@@ -642,9 +696,9 @@ defineSkill({
       if (cands.length < 2) return;
       const ts = await ctx.ask.targets(p, { min: 2, max: 2, candidates: cands, prompt: '【离间】：选择两名男性角色进行决斗' });
       if (ts.length < 2) return;
+      // respondCard 已弃置该牌
       const c = await ctx.ask.card(p, { prompt: '【离间】：弃置一张牌', optional: false, reason: 'lijian' });
       if (!c) return;
-      await ctx.discard(p, [c], { reason: 'lijian' });
       await ctx.game.log(`【离间】：${ts[0].name} 视为对 ${ts[1].name} 使用【决斗】`);
       let attacker = ts[0], defender = ts[1];
       let guard = 0;
@@ -660,5 +714,87 @@ defineSkill({
 function SUIT_CN_TEXT(suit) {
   return { spade: '黑桃', heart: '红桃', club: '梅花', diamond: '方块' }[suit] || '';
 }
+
+// ================= SG004 补全（界 4 条） =================
+
+// 界甘宁 · 奇袭：出牌阶段限一次，将一张黑色牌当【过河拆桥】使用。
+defineSkill({
+  id: 'jie_qixi', name: '奇袭',
+  desc: '出牌阶段限一次，你可以将一张黑色牌当【过河拆桥】使用。',
+  active: {
+    perPhase: true,
+    prompt: '将一张黑色牌当【过河拆桥】使用',
+    async effect(ctx) {
+      const p = ctx.self;
+      const c = await pickHandCard(ctx, p, x => !isRed(x), '【奇袭】：选择一张黑色手牌当【过河拆桥】');
+      if (!c) return;
+      const cands = ctx.game.alive().filter(x => x !== p &&
+        (x.hand.length || Object.values(x.equips).some(Boolean) || x.judgeZone.length));
+      if (!cands.length) return;
+      const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【奇袭】：选择一名角色' });
+      if (!ts.length) return;
+      await ctx.useCard({ from: p, card: c, targets: [ts[0]], asName: 'guohe', reason: 'qixi' });
+    },
+  },
+});
+
+// 界黄盖 · 苦肉：出牌阶段限一次，弃一张牌，失去 1 点体力，摸三张牌。
+defineSkill({
+  id: 'jie_kurou', name: '苦肉',
+  desc: '出牌阶段限一次，你可以弃置一张牌，然后失去 1 点体力，摸三张牌。',
+  active: {
+    perPhase: true,
+    prompt: '弃置一张牌，失去 1 点体力，摸三张牌',
+    async effect(ctx) {
+      const p = ctx.self;
+      const pool = [...p.hand, ...Object.values(p.equips).filter(Boolean)];
+      if (!pool.length) return;
+      const res = await ctx.game.ask(p, 'card', {
+        prompt: '【苦肉】：弃置一张牌', cards: pool.map(c => c.id), optional: false, reason: 'kurou',
+      });
+      const c = res && pool.find(x => x.id === res.cardId);
+      if (!c) return;
+      await ctx.discard(p, [c], { reason: 'kurou' });
+      await ctx.loseHp(p, 1, { reason: 'kurou' });
+      if (p.alive) await ctx.draw(p, 3, { reason: 'kurou' });
+    },
+  },
+});
+
+// 界孙尚香 · 结姻：出牌阶段限一次，弃两张手牌，令一名已受伤男性角色与你各回复 1 点体力。
+defineSkill({
+  id: 'jie_jieyin', name: '结姻',
+  desc: '出牌阶段限一次，你可以弃置两张手牌，令一名已受伤的男性角色与你各回复 1 点体力。',
+  active: {
+    perPhase: true,
+    prompt: '弃置两张手牌，令一名受伤男性角色与你各回复 1 点体力',
+    async effect(ctx) {
+      const p = ctx.self;
+      if (p.hand.length < 2) return;
+      const cands = ctx.game.alive().filter(x => x !== p && x.gender !== 'female' && x.hp < x.maxHp);
+      if (!cands.length) return;
+      const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【结姻】：选择一名已受伤的男性角色' });
+      if (!ts.length) return;
+      const res = await ctx.game.ask(p, 'cards', {
+        prompt: '【结姻】：弃置两张手牌', cards: p.hand.map(c => c.id), min: 2, max: 2, optional: false,
+      });
+      const cards = (res?.cardIds || []).map(id => p.hand.find(c => c.id === id)).filter(Boolean).slice(0, 2);
+      if (cards.length < 2) return;
+      await ctx.discard(p, cards, { reason: 'jieyin' });
+      await ctx.recover(ts[0], 1, { reason: 'jieyin' });
+      await ctx.recover(p, 1, { reason: 'jieyin' });
+    },
+  },
+});
+
+// 界孙尚香 · 枭姬：失去装备区里的一张牌后，可以摸两张牌。
+defineSkill({
+  id: 'jie_xiaoji', name: '枭姬',
+  desc: '当你失去装备区里的一张牌后，你可以摸两张牌。',
+  triggers: [{
+    on: 'equip.lose', who: 'self', optional: true,
+    async effect(ctx) { await ctx.draw(ctx.self, 2, { reason: 'xiaoji' }); },
+  }],
+});
 
 export {};

@@ -16,6 +16,7 @@
     <button id="btnSkills" class="ghost hidden">技能</button>
     <button id="btnAuto" class="ghost hidden">托管</button>
     <button id="btnLog" class="ghost hidden" aria-controls="logPanel" aria-expanded="false">战报</button>
+    <button id="btnSfx" class="ghost" type="button" aria-pressed="true" title="切换音效（合成音，无外部资源）">音效开</button>
     <button id="btnHelp" class="ghost">玩法</button>
     <div id="conn" class="conn">未连接</div>
   </header>
@@ -29,6 +30,24 @@
       <div class="row">
         <label>选将</label>
         <div id="pickModeList" class="chips"></div>
+      </div>
+      <div class="row" id="pickCountRow">
+        <label>几选一</label>
+        <div id="pickCountList" class="chips"></div>
+      </div>
+      <div class="row" id="dualRow">
+        <label>双将</label>
+        <label class="check"><input id="dualOn" type="checkbox" /> 双将：体力取平均（向上取整），护甲相加</label>
+      </div>
+      <div class="row" id="hostRoleRow">
+        <label>房主身份</label>
+        <label class="check"><input id="hostRoleOn" type="checkbox" /> 自选（身份场 / 军争）</label>
+        <select id="hostRoleSel" class="pick-select" disabled>
+          <option value="lord">主公</option>
+          <option value="loyalist">忠臣</option>
+          <option value="rebel">反贼</option>
+          <option value="renegade">内奸</option>
+        </select>
       </div>
       <div class="row">
         <label>我的武将</label>
@@ -93,10 +112,11 @@
       <div id="roomSeats" class="seats"></div>
       <div id="roomConfig"></div>
       <div class="row">
+        <button id="btnReady" class="secondary hidden">准备</button>
         <button id="btnStart" class="primary">开始对局</button>
         <button id="btnCopy" class="ghost">复制房间号</button>
       </div>
-      <div class="hint">房主才能开始；未满人时会自动用电脑补足到模式最少人数。</div>
+      <div class="hint">房主才能开始；第一局可直接开始，之后需要所有真人玩家点「准备」。打完后房间会保留，所有人退出 5 分钟后自动回收。</div>
     </div>
   </section>
 

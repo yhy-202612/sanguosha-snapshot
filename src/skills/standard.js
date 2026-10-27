@@ -1,4 +1,4 @@
-import { defineSkill } from '../engine/skill.js';
+import { defineSkill, effSkills } from '../engine/skill.js';
 import { CARD_META, isRed, cardLabel } from '../engine/cards.js';
 
 // ---------- 工具 ----------
@@ -12,8 +12,10 @@ function takeFromZones(game, card) {
 }
 function redCards(p) { return p.hand.filter(isRed); }
 function blackCards(p) { return p.hand.filter(c => !isRed(c)); }
-async function pickCard(ctx, player, filter, prompt) {
-  return ctx.ask.card(player, { filter, prompt, optional: true, reason: 'skill' });
+// 注意：ctx.ask.card（= respondCard）本身就会把选中的牌移出手牌并置入弃牌堆，
+// 调用方不要再 ctx.discard，否则会二次触发 cards.discard（屯田/连营等会一牌算两次）。
+async function pickCard(ctx, player, filter, prompt, reason = 'skill') {
+  return ctx.ask.card(player, { filter, prompt, optional: true, reason });
 }
 
 // ================= 魏 =================
@@ -287,7 +289,7 @@ defineSkill({
   id: 'mashu', name: '马术', desc: '锁定技，你计算与其他角色的距离 -1。',
   triggers: [{
     on: 'distance.calc', who: 'self', optional: false,
-    async effect(ctx) { if (ctx.data.self === ctx.self) ctx.data.value -= 1; },
+    effect(ctx) { if (ctx.data.self === ctx.self) ctx.data.value -= 1; },   // distance.calc 走同步分发，不能 async
   }],
 });
 
@@ -316,12 +318,14 @@ defineSkill({
       const top = ctx.game.deck.splice(-n, n);
       if (!top.length) return;
       // 简化：逐张询问置于顶或底
-      const rest = [];
+      const toTop = [], toBottom = [];
       for (const c of top) {
         const idx = await ctx.ask.choose(ctx.self, [`${cardLabel(c)} → 置于牌堆顶`, `${cardLabel(c)} → 置于牌堆底`], { prompt: '【观星】：选择放置位置' });
-        if (idx === 0) rest.push(c); else ctx.game.deck.unshift(c);
+        if (idx === 0) toTop.push(c); else toBottom.push(c);
       }
-      ctx.game.deck.push(...rest);
+      // 牌堆顶在数组末尾；top 的遍历序是「底→顶」，顺序压回即可保持相对顺序
+      ctx.game.deck.push(...toTop);
+      if (toBottom.length) ctx.game.deck.unshift(...toBottom);
       await ctx.log(`${ctx.self.name} 发动【观星】，调整了 ${top.length} 张牌`);
     },
   }],
@@ -331,7 +335,7 @@ defineSkill({
   id: 'kongcheng', name: '空城', desc: '锁定技，若你没有手牌，你不能成为【杀】或【决斗】的目标。',
   triggers: [{
     on: 'target.before', who: 'any', optional: false,
-    filter: (d) => d.target === d.self && d.self.hand.length === 0 && d.card && (d.card.name === 'sha' || d.card.name === 'juedou'),
+    filter: (d) => d.target === d.player && d.player.hand.length === 0 && d.card && (d.card.name === 'sha' || d.card.name === 'juedou'),
     async effect(ctx) { ctx.data.canceled = true; await ctx.log(`${ctx.self.name}【空城】生效，不能成为目标`); },
   }],
 });
@@ -354,7 +358,7 @@ defineSkill({
 defineSkill({
   id: 'zhiheng', name: '制衡', desc: '出牌阶段限一次，你可以弃置任意张牌，然后摸等量的牌。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置任意张牌并摸等量的牌',
     async effect(ctx) {
       const p = ctx.self;
@@ -420,7 +424,7 @@ defineSkill({
 defineSkill({
   id: 'fanjian', name: '反间', desc: '出牌阶段限一次，你可以令一名其他角色选择一种花色，然后获得你的一张手牌并展示之，若此牌与所选花色不同，该角色受到 1 点伤害。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '令一名角色猜花色',
     async effect(ctx) {
       const p = ctx.self;
@@ -448,18 +452,18 @@ defineSkill({
 defineSkill({
   id: 'liuli', name: '流离', desc: '当你成为【杀】的目标时，你可以弃置一张牌，将此【杀】转移给你攻击范围内的另一名角色。',
   triggers: [{
-    on: 'target.before', who: 'self', optional: true,
-    filter: (d) => d.card && d.card.name === 'sha' && d.target === d.self,
+    on: 'target.before', who: 'any', optional: true,
+    filter: (d) => d.card && d.card.name === 'sha' && d.target === d.player && d.player.hand.length > 0,
     async effect(ctx) {
       const p = ctx.self;
       const used = ctx.data.used || [];
       const cands = ctx.game.alive().filter(x => x !== p && !used.includes(x) && ctx.inRange(p, x));
       if (!cands.length) return;
-      const c = await pickCard(ctx, p, {}, '【流离】：弃置一张牌，转移此【杀】');
+      const c = await pickCard(ctx, p, {}, '【流离】：弃置一张牌，转移此【杀】', 'liuli');
       if (!c) return;
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【流离】：将【杀】转移给谁？' });
       if (!ts.length) return;
-      await ctx.discard(p, [c], { reason: 'liuli' });
+      // 牌已由 respondCard 弃置，勿重复 discard
       ctx.data.target = ts[0];
       ctx.data.redirected = true;
       await ctx.log(`${p.name} 发动【流离】，将【杀】转移给 ${ts[0].name}`);
@@ -471,7 +475,7 @@ defineSkill({
   id: 'qianxun', name: '谦逊', desc: '锁定技，你不能成为【顺手牵羊】和【乐不思蜀】的目标。',
   triggers: [{
     on: 'target.before', who: 'any', optional: false,
-    filter: (d) => d.target === d.self && d.card && (d.card.name === 'shunshou' || d.card.name === 'lebu'),
+    filter: (d) => d.target === d.player && d.card && (d.card.name === 'shunshou' || d.card.name === 'lebu'),
     async effect(ctx) { ctx.data.canceled = true; await ctx.log(`${ctx.self.name}【谦逊】生效`); },
   }],
 });
@@ -488,7 +492,7 @@ defineSkill({
 defineSkill({
   id: 'jieyin', name: '结姻', desc: '出牌阶段限一次，你可以弃置两张手牌，令一名已受伤的男性角色回复 1 点体力，然后你回复 1 点体力。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置两张手牌，令一名受伤男性角色与你各回复 1 点体力',
     async effect(ctx) {
       const p = ctx.self;
@@ -531,7 +535,7 @@ defineSkill({
 defineSkill({
   id: 'qingnang', name: '青囊', desc: '出牌阶段限一次，你可以弃置一张手牌，令一名已受伤的角色回复 1 点体力。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置一张手牌，令一名受伤角色回复 1 点体力',
     async effect(ctx) {
       const p = ctx.self;
@@ -539,9 +543,8 @@ defineSkill({
       if (!cands.length || !p.hand.length) return;
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: cands, prompt: '【青囊】：选择一名受伤角色' });
       if (!ts.length) return;
-      const c = await pickCard(ctx, p, {}, '【青囊】：弃置一张手牌');
+      const c = await pickCard(ctx, p, {}, '【青囊】：弃置一张手牌', 'qingnang');
       if (!c) return;
-      await ctx.discard(p, [c], { reason: 'qingnang' });
       await ctx.recover(ts[0], 1, { reason: 'qingnang' });
     },
   },
@@ -551,11 +554,11 @@ defineSkill({
   id: 'wushuang', name: '无双', desc: '锁定技，当你使用【杀】时，目标需连续使用两张【闪】才能抵消；当你使用【决斗】时，对方需连续打出两张【杀】。',
   triggers: [{
     on: 'dodge.before', who: 'any', optional: false,
-    filter: (d) => d.from && d.from.skills?.some(s => s.id === 'wushuang') && d.card,
+    filter: (d) => d.from && effSkills(d.from).some(s => s.id === 'wushuang') && d.card,
     async effect(ctx) { ctx.data.extraDodge = 1; },
   }, {
     on: 'juedou.need', who: 'any', optional: false,
-    filter: (d) => d.from && d.from.skills?.some(s => s.id === 'wushuang'),
+    filter: (d) => d.from && effSkills(d.from).some(s => s.id === 'wushuang'),
     async effect(ctx) { ctx.data.extraSha = 1; },
   }],
 });
@@ -563,7 +566,7 @@ defineSkill({
 defineSkill({
   id: 'lijian', name: '离间', desc: '出牌阶段限一次，你可以弃置一张牌，令两名男性角色进行【决斗】。',
   active: {
-    perTurn: true,
+    perPhase: true,
     prompt: '弃置一张牌，令两名男性角色决斗',
     async effect(ctx) {
       const p = ctx.self;
@@ -571,9 +574,8 @@ defineSkill({
       if (cands.length < 2) return;
       const ts = await ctx.ask.targets(p, { min: 2, max: 2, candidates: cands, prompt: '【离间】：选择两名男性角色进行决斗' });
       if (ts.length < 2) return;
-      const c = await pickCard(ctx, p, {}, '【离间】：弃置一张牌');
+      const c = await pickCard(ctx, p, {}, '【离间】：弃置一张牌', 'lijian');
       if (!c) return;
-      await ctx.discard(p, [c], { reason: 'lijian' });
       await ctx.game.log(`【离间】：${ts[0].name} 与 ${ts[1].name} 进行决斗`);
       // 简化：由第二人先出杀
       let attacker = ts[1], defender = ts[0];

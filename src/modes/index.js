@@ -123,15 +123,11 @@ const ROLE_TABLE = {
 function assignRoles(game) {
   const n = game.players.length;
   const roles = (ROLE_TABLE[n] || ROLE_TABLE[8]).slice(0, n);
-  const shuffled = game.rng.shuffle(roles);
-  // 主公固定为 0 号位（房主），其余随机
-  game.players.forEach((p, i) => {
-    p.role = i === 0 ? 'lord' : shuffled.filter(r => r !== 'lord')[(i - 1) % Math.max(1, n - 1)] || 'rebel';
-  });
-  // 修正重复：按洗牌结果逐一分配非主公身份
-  const others = game.rng.shuffle(shuffled.filter(r => r !== 'lord'));
-  let k = 0;
-  game.players.forEach((p, i) => { if (i > 0) p.role = others[k++] || 'rebel'; });
+  // 房主自选身份：config.hostRole 在身份白名单内且该人数下存在这个身份，才按它指定给 0 号位（房主）
+  const want = game.config?.hostRole;
+  const hostRole = want && roles.includes(want) ? want : 'lord';
+  const others = game.rng.shuffle(roles.filter(r => r !== hostRole));
+  game.players.forEach((p, i) => { p.role = i === 0 ? hostRole : (others[i - 1] || 'rebel'); });
 }
 
 function identityVictory(game) {
@@ -157,9 +153,11 @@ async function identityReward(game, dead, killer) {
   }
   if (dead.role === 'loyalist' && killer && killer.role === 'lord') {
     const all = [...killer.hand, ...Object.values(killer.equips).filter(Boolean)];
-    killer.hand = [];
-    killer.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null };
-    game.discardPile.push(...all);
+    // ★原地清空，不要替换数组引用（替换会打断其他地方持有的 hand 引用）
+    killer.hand.length = 0;
+    killer.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+    // ★必须走 pushDiscard（去重 + 统一入口），直推 discardPile 会造成同 id 双存
+    game.pushDiscard(all);
     await game.log(`主公误杀忠臣，弃置所有牌`);
   }
 }
