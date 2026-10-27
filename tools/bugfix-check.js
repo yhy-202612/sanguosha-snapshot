@@ -1050,6 +1050,104 @@ function spyAsks(g) {
   ok((p0.flags.ci || []).length === 0, 'T47d 删 duwang 才应回收「刺」');
 }
 
+// ---------------- T48 交换类技能必须派 lose + change（SG034 P0：甘露/诡图/冠武） ----------------
+{
+  const g = newGame(3);
+  const [a, b] = g.players;
+  const jx = mk('zhuge_jx'); const qg = mk('qinggang');
+  a.skills = [getSkill('rx_jingxie')];
+  a.equips = { weapon: jx, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  b.equips = { weapon: qg, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  const ev = [];
+  const orig = g.trigger.bind(g);
+  g.trigger = async (e, d) => { if (e === 'equip.lose' || e === 'equip.change') ev.push(`${e}:${d.self.name}:${d.slot}:${d.card ? d.card.name : 'null'}`); return orig(e, d); };
+  await g.swapEquipSlot(a, b, 'weapon', { reason: 'test' });
+  ok(a.equips.weapon === qg && b.equips.weapon === jx, 'T48a 交换后双方武器应对调');
+  ok(ev.filter(x => x.startsWith('equip.lose')).length === 2, `T48b 双方各派 1 次 lose（实际 ${ev.filter(x => x.includes('lose')).length}）`);
+  ok(ev.filter(x => x.startsWith('equip.change')).length === 2, `T48c 双方各派 1 次 change（实际 ${ev.filter(x => x.includes('change')).length}）`);
+  ok(a.flags.shaUnlimited !== true, `T48d 精械弩换走后不得残留 shaUnlimited（实际 ${a.flags.shaUnlimited}）`);
+  ok(b.flags.shaUnlimited !== true, `T48e 接收方也不得凭空获得 shaUnlimited（实际 ${b.flags.shaUnlimited}）`);
+  // 冠武式「凭空换上」：旧装备必须派 lose 并进弃牌堆
+  const p2 = g.players[2];
+  p2.equips = { weapon: jx, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  const ql = mk('qinglong'); ql.sub = 'weapon';
+  g.discardPile = [];
+  await g.forceEquip(p2, ql, { reason: 'test' });
+  ok(p2.equips.weapon === ql && g.discardPile.some(c => c.id === jx.id),
+    'T48f forceEquip 应换上新武器并把旧武器放进弃牌堆');
+  ok(p2.flags.shaUnlimited !== true, 'T48g forceEquip 换掉精械弩后不得残留 shaUnlimited');
+}
+
+// ---------------- T49 respondCard 必须清牌级豁免（SG034 P1） ----------------
+{
+  const g = newGame(2);
+  const p0 = g.players[0];
+  const sha = mk('sha');
+  sha.ignoreShaLimit = true; sha.ignoreRange = true;
+  p0.hand = [sha];
+  g.responder = { ask: async () => ({ cardId: sha.id }), askPlay: async () => ({ endPhase: true }) };
+  const got = await g.respondCard(p0, { filter: { name: 'sha' }, reason: 'test' });
+  ok(!!got, 'T49a respondCard 应返回打出的牌（前置条件）');
+  ok(!sha.ignoreShaLimit && !sha.ignoreRange,
+    `T49b 打出的牌必须被清掉牌级豁免（实际 ${sha.ignoreShaLimit}/${sha.ignoreRange}）`);
+}
+
+// ---------------- T50 afterEquipLose 不得双调（SG034：白银狮子只回 1） ----------------
+{
+  const g = newGame(2);
+  const p0 = g.players[0];
+  p0.hp = 2; p0.maxHp = 4;
+  const by = mk('baiyin'); by.sub = 'armor';
+  const bg = mk('bagua'); bg.sub = 'armor';
+  await g.equipCard(p0, by);
+  p0.hp = 2;
+  await g.equipCard(p0, bg);              // 换装路径
+  ok(p0.hp === 3, `T50a 换装失去白银狮子应只回 1 点（实际 ${p0.hp}）`);
+  p0.hp = 2;
+  await g.discardCards(p0, [bg], { reason: 'test' });   // 弃置路径
+  ok(p0.hp === 2, `T50b 弃置失去八卦阵不应回血（实际 ${p0.hp}）`);
+  const by2 = mk('baiyin'); by2.sub = 'armor';
+  await g.equipCard(p0, by2);
+  p0.hp = 2;
+  await g.discardCards(p0, [by2], { reason: 'test' });
+  ok(p0.hp === 3, `T50c 弃置失去白银狮子应只回 1 点（实际 ${p0.hp}）`);
+}
+
+// ---------------- T51 crossPlayer 容器：破军牌在别人身上也要能回收（SG034 P1） ----------------
+{
+  ok(HELD_CONTAINERS.find(c => c.key === 'jun')?.crossPlayer === true,
+    'T51a 「军」必须声明 crossPlayer（牌在目标身上）');
+  ok(HELD_CONTAINERS.find(c => c.key === 'flags.m5Kou')?.crossPlayer === true,
+    'T51b 「寇」必须声明 crossPlayer（牌在目标身上）');
+  const g = newGame(2);
+  const [caster, target] = g.players;
+  caster.skills = [getSkill('pojun')];
+  const c = mk('sha');
+  target.jun = [c];
+  target.hand = []; target.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  g.discardPile = [];
+  await g.removeSkills(caster, ['pojun']);
+  ok(caster.skills.length === 0, 'T51c 前置：施放者已失去【破军】');
+  ok((target.jun || []).length === 0, `T51d 施放者失技后目标身上的「军」必须被回收（实际 ${(target.jun || []).length}）`);
+}
+
+// ---------------- T52 owner 数组用 every 语义（SG034：删统荫不得误清承奉的匡祚） ----------------
+{
+  const kz = HELD_CONTAINERS.find(c => c.key === 'flags.kuangzuo');
+  ok(Array.isArray(kz?.owner) && kz.owner.length === 3, 'T52a 匡祚 owner 应为三元数组');
+  const g = newGame(2);
+  const p0 = g.players[0];
+  p0.skills = [getSkill('tongyin'), getSkill('chengfeng')];
+  const c = mk('sha');
+  p0.flags.kuangzuo = [c];
+  g.discardPile = [];
+  await g.removeSkills(p0, ['tongyin']);
+  ok((p0.flags.kuangzuo || []).length === 1,
+    `T52b 只删【统荫】时不得回收仍被【承奉】使用的「匡祚」（实际 ${(p0.flags.kuangzuo || []).length}）`);
+  await g.removeSkills(p0, ['chengfeng']);
+  ok((p0.flags.kuangzuo || []).length === 0, 'T52c 两方都失去后才应回收');
+}
+
 // ---------------- 汇总 ----------------
 console.log(`\nBUGFIX-CHECK：通过 ${pass} / 失败 ${fail}`);
 if (bad.length) { console.log('失败明细：'); for (const b of bad) console.log('  ✗ ' + b); }

@@ -746,7 +746,9 @@ defineSkill({
             if (p.equips[slot]) continue;
             // ★t 的装备被移走 → 走引擎出口派发 equip.lose（SG033 P0-2）
             await g.unequipCard(t, c, { reason: 'zunwei' });
+            // ★接收侧必须派 equip.change（SG034 P1）：否则精械弩/飒然/降怒在接收方当回合不生效
             p.equips[slot] = c; moved++;
+            await g.trigger('equip.change', { self: p, slot, card: c, old: null });
           }
         }
         await ctx.log(`【尊位】：移入 ${moved} 张装备`);

@@ -1397,8 +1397,15 @@ defineSkill({
         if (from.zone === 'equip') {
           await g.unequipCard(from.owner, from.card, { reason: 'rangjie' });
           const sub = CARD_META[from.card.name]?.sub || 'weapon';
-          if (dest.equips[sub]) await ctx.discard(dest, [dest.equips[sub]], { reason: 'rangjie' });
-          dest.equips[sub] = from.card;
+          const dslot = { weapon: 'weapon', armor: 'armor', horsePlus: 'horsePlus', horseMinus: 'horseMinus', treasure: 'treasure' }[sub] || 'weapon';
+          // 目标槽位原有装备先摘下（派 lose）再置入，最后派 change（SG034 P1）
+          if (dest.equips[dslot]) {
+            const oldC = dest.equips[dslot];
+            await g.unequipCard(dest, oldC, { reason: 'rangjie' });
+            g.pushDiscard(oldC);   // ★摘下的牌必须有着落，否则凭空丢失
+          }
+          dest.equips[dslot] = from.card;
+          await g.trigger('equip.change', { self: dest, slot: dslot, card: from.card, old: null });
         } else {
           from.owner.judgeZone = (from.owner.judgeZone || []).filter((z) => z.card !== from.card);
           dest.judgeZone = dest.judgeZone || [];

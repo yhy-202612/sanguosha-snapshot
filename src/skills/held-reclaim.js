@@ -53,7 +53,8 @@ registerHeldContainer(flagsArr('wyCards', 'wanyi'));            // 【万仪】�
 registerHeldContainer(flagsArr('hanCards', 'bc_qiuan'));        // 【嵌函】「函」（buchen）
 registerHeldContainer(flagsArr('renCards', 'youyi'));           // 【游医】「仁」区（shenwu；★不能叫 ren）
 registerHeldContainer(flagsArr('m5Qj', 'm5_qingjian'));         // 【清俭】（mou5）
-registerHeldContainer(flagsArr('m5Kou', 'm5_pojun'));           // 【破军】「寇」（mou5）
+// 【破军】「寇」：同样置于**目标**身上（mou5:316-334），需 crossPlayer（SG034 P1）
+registerHeldContainer({ ...flagsArr('m5Kou', 'm5_pojun'), crossPlayer: true });
 // 「刺」：**由【独往】创建并维护**（qunying.js:143），【刺北】只读取/消耗（SG032 A2 实测：
 // 登记成 cibei 会「删 duwang 漏 ci、删 cibei 误清 ci」，两个方向都错）。
 registerHeldContainer(flagsArr('ci', 'duwang'));
@@ -161,6 +162,7 @@ registerHeldContainer({
 //   故不需要额外声明；removeSkills 时 owner 不在集合里自然跳过（施放者失技不该动别人的牌）。
 registerHeldContainer({
   key: 'jun', owner: 'pojun',
+  crossPlayer: true,   // 牌置于**目标**武将牌上：施放者失技/阵亡时也要回收（SG034 P1）
   get: (p) => p.jun,
   clear: (p, taken) => {
     const drop = new Set(taken || []);

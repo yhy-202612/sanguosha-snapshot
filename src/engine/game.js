@@ -581,8 +581,8 @@ export class Game {
           for (const k of Object.keys(player.equips)) {
             if (player.equips[k] === c) {
               player.equips[k] = null;
+              // afterEquipLose 由 trigger 出口统一调用（SG034），此处不再重复
               await this.trigger('equip.lose', { self: player, card: c, slot: k });
-              await this.afterEquipLose(player, c);
             }
           }
           const j = player.judgeZone.findIndex(z => z.card === c);
@@ -617,7 +617,6 @@ export class Game {
             if (from.equips[k] === c) {
               from.equips[k] = null;
               await this.trigger('equip.lose', { self: from, card: c, slot: k });
-              await this.afterEquipLose(from, c);
             }
           }
           // 判定区的牌被顺走/获得时也要移出判定区，否则同一张牌会同时存在于两处
@@ -816,7 +815,18 @@ export class Game {
     const owned = (id) => !owners || owners.has(id);
     // ★owner 可以是数组（SG033 P1-3：一个容器被多个技能写入，如 kuangzuo =
     //   tongyin/chengfeng 写、kuangzuo 消耗；只登记一个 id 会导致「删 A 漏清、删 B 误清」）
-    const ownedSpec = (owner) => !owners || [].concat(owner || []).some(x => owners.has(x));
+    // ★语义（SG034）：单 owner = 该技能被删就回收；多 owner = **全部**被删才回收
+    //   （OR 语义会让「删【统荫】」误清仍被【承奉】使用的「匡祚」）。
+    const ownedSpec = (owner) => {
+      if (!owners) return true;                       // 全量回收（死亡 / 失去全部技能）
+      const list = [].concat(owner || []);
+      if (!list.length) return true;
+      if (list.length === 1) return owners.has(list[0]);
+      // 多 owner：只有「玩家身上已不再拥有其中任何一个」时才回收。
+      //   不能写成 every(x => owners.has(x))：逐个删技能时永远凑不齐（T52c 实测不回收）。
+      const stillHas = (id) => (player.skills || []).some(x => x && x.id === id);
+      return list.every(id => !stillHas(id));
+    };
     const taken = [];
     // ① 技能显式声明 reclaimCards(player) => [card...]（取牌 + 清空自己的容器，一步完成）：
     //    「把牌放在武将牌旁 / 移出游戏」的技能必须声明它，否则角色死亡或失去技能后
@@ -854,22 +864,28 @@ export class Game {
     // ③ 集中声明的持有型容器（skills/held-reclaim.js）：与技能是否还在身上无关，容器空了即跳过
     for (const spec of HELD_CONTAINERS) {
       if (spec.owner && !ownedSpec(spec.owner)) continue;   // 只回收被删技能名下的容器
-      let arr = null;
-      try { arr = spec.get(player); } catch { arr = null; }
-      if (!Array.isArray(arr) || !arr.length) {
-        if (spec.alwaysClear) { try { spec.clear(player, [], []); } catch { /* ignore */ } }
-        continue;
+      // ★crossPlayer（SG034 P1）：牌被放在**别人**身上的容器（【破军】「军」、【破军】「寇」），
+      //   施放者阵亡/失技时，容器在目标身上、没人回收 → 牌永久滞留。故这类要遍历所有玩家。
+      const holders = spec.crossPlayer ? (this.players || []) : [player];
+      for (const holder of holders) {
+        if (!holder) continue;
+        let arr = null;
+        try { arr = spec.get(holder); } catch { arr = null; }
+        if (!Array.isArray(arr) || !arr.length) {
+          if (spec.alwaysClear) { try { spec.clear(holder, [], []); } catch { /* ignore */ } }
+          continue;
+        }
+        const { cards, keep } = this._sweepHeldArr(arr);
+        if (!cards.length) {
+          // 「只清不返回」型容器（虚拟牌 / 合成牌，如 extraWeaponCard、guifu）也必须清空，
+          // 否则失去技能后容器里的虚拟牌一直挂着（它不是真牌，不能入弃牌堆）
+          if (spec.alwaysClear) { try { spec.clear(holder, [], keep); } catch { /* ignore */ } }
+          continue;
+        }
+        for (const c of cards) taken.push(c);
+        // clear 收到「本次真正取走的牌」，供混合型容器精确剔除（否则整体置空会误删引用项）
+        try { spec.clear(holder, cards, keep); } catch { /* 容器形态不符时忽略 */ }
       }
-      const { cards, keep } = this._sweepHeldArr(arr);
-      if (!cards.length) {
-        // 「只清不返回」型容器（虚拟牌 / 合成牌，如 extraWeaponCard、guifu）也必须清空，
-        // 否则失去技能后容器里的虚拟牌一直挂着（它不是真牌，不能入弃牌堆）
-        if (spec.alwaysClear) { try { spec.clear(player, [], keep); } catch { /* ignore */ } }
-        continue;
-      }
-      for (const c of cards) taken.push(c);
-      // clear 收到「本次真正取走的牌」，供混合型容器精确剔除（否则整体置空会误删引用项）
-      try { spec.clear(player, cards, keep); } catch { /* 容器形态不符时忽略 */ }
     }
     // ④ 内置已知容器：【笔伐】bifaStack（无 owner 归属，只在全量回收时处理）
     const stack = owners ? [] : (player.bifaStack || []);
@@ -1326,12 +1342,48 @@ export class Game {
     for (const k of Object.keys(player.equips)) {
       if (player.equips[k] === card) {
         player.equips[k] = null;
-        await this.trigger('equip.lose', { self: player, card, slot: k, reason });
+        await this.trigger('equip.lose', { self: player, card, slot: k, reason, noLoseHook: true });
         await this.afterEquipLose(player, card);
         return k;
       }
     }
     return null;
+  }
+
+  // 交换两名角色某个装备槽的牌（SG034 P0：甘露/诡图/冠武的「交换类」技能曾零 lose、零 change）
+  // 顺序：双方先置空 → 各自派 equip.lose（noChange，跳过补派）→ 写入新牌 → 各自派一次 equip.change。
+  // 这样双方监听者看到的状态都自洽（不会出现「lose 时槽位仍指向旧牌」）。
+  async swapEquipSlot(a, b, slot, { reason = 'swap' } = {}) {
+    const ca = a?.equips?.[slot] || null;
+    const cb = b?.equips?.[slot] || null;
+    if (ca === cb) return false;
+    if (a?.equips) a.equips[slot] = null;
+    if (b?.equips) b.equips[slot] = null;
+    if (ca) { await this.trigger('equip.lose', { self: a, card: ca, slot, reason, noChange: true, noLoseHook: true }); await this.afterEquipLose(a, ca); }
+    if (cb) { await this.trigger('equip.lose', { self: b, card: cb, slot, reason, noChange: true, noLoseHook: true }); await this.afterEquipLose(b, cb); }
+    if (a?.equips) a.equips[slot] = cb;
+    if (b?.equips) b.equips[slot] = ca;
+    if (cb || ca) await this.trigger('equip.change', { self: a, slot, card: cb, old: ca });
+    if (ca || cb) await this.trigger('equip.change', { self: b, slot, card: ca, old: cb });
+    return true;
+  }
+
+  // 一次性把某张牌装到玩家身上（用于「凭空换上某装备」类技能）——
+  // 等价于「摘下旧装备（派 lose）→ 置入新装备（派 change）」，避免各处手写漏派（SG034 P0：冠武）
+  async forceEquip(player, card, { reason = 'force' } = {}) {
+    const sub = CARD_META[card.name]?.sub;
+    const slot = sub ? EQUIP_SUB[sub] : null;
+    if (!slot || !player) return null;
+    const old = player.equips[slot] || null;
+    if (old === card) return slot;
+    if (old) {
+      await this.unequipCard(player, old, { reason });
+      this.pushDiscard(old);
+    }
+    player.equips[slot] = card;
+    await this.log(`${player.name} 装备 ${cardLabel(card)}`);
+    await this.trigger('equip.change', { self: player, slot, card, old });
+    return slot;
   }
 
   async equipCard(player, card) {
@@ -1362,7 +1414,7 @@ export class Game {
       this.pushDiscard(old);
       await this.log(`${player.name} 弃置了 ${cardLabel(old)}`);
       // noChange：让 trigger 末尾的「补派 equip.change」跳过 —— 本函数自己会在最后派发一次
-      await this.trigger('equip.lose', { self: player, card: old, slot, noChange: true });
+      await this.trigger('equip.lose', { self: player, card: old, slot, noChange: true, noLoseHook: true });
       await this.afterEquipLose(player, old);
     }
     player.equips[slot] = card;
@@ -1448,6 +1500,7 @@ export class Game {
     const i = player.hand.indexOf(actual);
     if (i >= 0) player.hand.splice(i, 1);
     this.clearExtraSlot(player, actual);
+    Game.stripCardMarks(actual);   // 打出即失去牌级豁免（SG034 P1：respondCard 曾绕过）
     if (!this.discardPile.includes(actual)) this.discardPile.push(actual);
     const disc2 = { self: player, cards: [actual], reason: opt.reason || 'respond', taken: [] };
     await this.trigger('cards.discard', disc2);
@@ -1824,6 +1877,12 @@ export class Game {
       const slotNow = data.slot ? data.self.equips?.[data.slot] : null;
       if (!slotNow && !data.noChange) {
         await this.trigger('equip.change', { self: data.self, slot: data.slot, card: null, old: data.card, lost: true });
+      }
+      // ★统一在 trigger 出口做「失去装备的收尾」（SG034 P1：全库 27 处手写 `equips[k]=null`
+      //   + 4 个 detachEquip 都绕过 afterEquipLose → 白银狮子在这些路径上永不回复）。
+      //   显式调用方（equipCard / unequipCard / swapEquipSlot）传 noLoseHook 自行调用，避免双触发。
+      if (!data.noLoseHook && data.card) {
+        await this.afterEquipLose(data.self, data.card);
       }
     }
   }

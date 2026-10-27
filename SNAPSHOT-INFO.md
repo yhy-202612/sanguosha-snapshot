@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 快照时间 | 2026-10-28 06:11 (+08:00) |
+| 快照时间 | 2026-10-28 06:58 (+08:00) |
 | 武将总数 | **603** |
 | 扩展包总数 | **48** |
 | 技能数 | `defineSkill` 调用 **1200**（71 个技能文件） |
@@ -12,15 +12,15 @@
 
 | 文件 | 指纹 |
 |---|---|
-| `src/engine/game.js` | `330fe6c94658` |
+| `src/engine/game.js` | `0c1ad416794f` |
 | `src/engine/cards.js` | `bcf9ec71e946` |
 | `src/engine/skill.js` | `f19187d03d42` |
 | `src/engine/pindian.js` | `4c78886315d3` |
 | `src/engine/virtual-extra.js` | `71dce56eb1dd` |
 | `src/data/generals.js` | `72a106817210` |
-| `src/skills/jsg_he.js` | `99a06c3c269e` |
-| `src/skills/jsg_cheng.js` | `f5d3a962a985` |
-| `src/skills/rare2.js` | `c7eea577cfde` |
+| `src/skills/jsg_he.js` | `1a8b1f3395ff` |
+| `src/skills/jsg_cheng.js` | `52783cf7f31b` |
+| `src/skills/rare2.js` | `a881a96def84` |
 | `src/skills/lei3.js` | `dd3270addd6a` |
 | `src/skills/flash2.js` | `d542290e383e` |
 | `src/skills/xinghuo2.js` | `2c03bae227f0` |

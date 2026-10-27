@@ -365,9 +365,8 @@ defineSkill({
           if (i >= 0) found = g.deck.splice(i, 1)[0];
         }
         if (!found) { await ctx.log('【冠武】：场上、弃牌堆、牌堆中都没有【青龙偃月刀】'); return; }
-        if (p.equips.weapon) { g.discardPile.push(p.equips.weapon); }
-        p.equips.weapon = found;
-        await g.trigger('equip.change', { self: p, card: found });
+        // ★SG034 P0：旧武器静默进弃牌堆 → 精械弩换成青龙后 shaUnlimited 残留（实测 shaUsed=99 仍可出杀）
+        await g.forceEquip(p, found, { reason: 'guanwu' });
         await ctx.log('【冠武】：获得【青龙偃月刀】');
       },
     },

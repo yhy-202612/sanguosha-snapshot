@@ -381,11 +381,12 @@ defineSkill({
       const ts = await ctx.ask.targets(p, { min: 2, max: 2, candidates: cands, prompt: '【甘露】：选择两名角色' });
       if (ts.length < 2) return;
       const [a, b] = ts;
-      const ea = { ...a.equips }, eb = { ...b.equips };
-      a.equips = eb;
-      b.equips = ea;
-      await g.trigger('equip.change', { self: a, slot: 'weapon', card: a.equips.weapon || null, old: ea.weapon || null });
-      await g.trigger('equip.change', { self: b, slot: 'weapon', card: b.equips.weapon || null, old: eb.weapon || null });
+      // ★SG034 P0：整区交换必须逐槽走 swapEquipSlot（各自派 lose + change + afterEquipLose）
+      //   原实现直接 `a.equips = eb; b.equips = ea` 后只补派两个 weapon 的 change，零 lose →
+      //   精械弩/飒然/降怒在交换后全部残留。
+      for (const slot of ['weapon', 'armor', 'horsePlus', 'horseMinus', 'treasure']) {
+        await g.swapEquipSlot(a, b, slot, { reason: 'ganlu' });
+      }
       await ctx.log(`${p.name} 发动【甘露】：${a.name} 与 ${b.name} 交换了装备区的所有牌`);
     },
   },

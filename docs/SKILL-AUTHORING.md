@@ -146,6 +146,18 @@ c.ignoreRange = true;      // 此【杀】无距离限制
   ★「获得装备后」型技能必须写 `filter: (d) => !!d.card && d.lost !== true`，否则失去装备时也会触发。
 - `armor.change`：护甲增减。改护甲**必须**走 `await g.addArmor(p, n)` / `await g.setArmor(p, n)`，
   不要直接 `p.armor = …`（否则监听护甲的技能不会刷新）。
+- ★**交换类技能**（【甘露】【诡图】等）必须用 `await g.swapEquipSlot(a, b, slot, {reason})`，
+  **不要**手写 `a.equips = eb; b.equips = ea`：那样零 lose、零 change，精械弩/飒然/降怒全部残留，
+  实测「精械弩换成青龙后 `shaUsed=99` 仍可出杀」（SG034 P0）。
+- ★**凭空换上装备**（【冠武】把青龙装到自己身上）走 `await g.forceEquip(player, card, {reason})`：
+  它负责「旧装备 unequipCard + 入弃牌堆 → 置入新装备 → 派 equip.change」。
+  手写 `p.equips.weapon = found` 会让旧装备静默进弃牌堆、监听者不刷新。
+- ★**摘下的牌必须有着落**：`unequipCard` 只负责「摘除 + 派发」，**不负责**入弃牌堆/进手牌。
+  写完 `await g.unequipCard(...)` 必须紧跟 `g.pushDiscard(c)` / `await ctx.discard(...)` /
+  `等待对方 gain` / 写入另一个容器 —— 否则牌凭空消失（SG034 实测【让节】换装时丢牌）。
+- ★**`afterEquipLose` 不要自己调**：引擎在 `trigger('equip.lose')` 出口统一调用
+  （白银狮子回血）。只有 `equipCard` / `unequipCard` / `swapEquipSlot` 这三个「自己已经调过」的地方
+  会传 `noLoseHook: true` 跳过。手写 `equips[k]=null` + `trigger('equip.lose', ...)` 会自动获得该收尾。
 - ★**不要静默摘装备**：统一走 `await g.unequipCard(player, card, { reason })` ——
   它做三件事：置空槽位 → 派发 `equip.lose` → `afterEquipLose`，并返回被摘掉的槽名。
   自己手写时也必须 **先置空槽位、再派发 `equip.lose`**：若先派发，监听者读 `equips[slot]`
@@ -195,9 +207,15 @@ registerHeldContainer({
 `vm|vxh|qx_|tian` 三重判据），**不能只判 `name`** —— 纯 vcard 的 id 是 `vxh999`、name 却是正常的
 `sha`，只判 name 会漏过（实测 `vxh999` 被推进弃牌堆）。
 
+★`crossPlayer: true`：牌被放在**别人**身上（【破军】把目标的牌置于目标武将牌上），
+施放者失技/阵亡时容器在目标身上、没人回收 → 牌永久滞留。这类容器必须声明 `crossPlayer: true`，
+引擎会遍历所有玩家回收（`jun`、`flags.m5Kou` 已如此登记）。
+
 ★`owner` 语义：`removeSkills(p, [id])` 只回收「owner 命中该 id」的容器，避免删 A 误清 B。
 一个容器被**多个技能**写入时（如 `flags.kuangzuo` = `tongyin`/`chengfeng` 写、`kuangzuo` 消耗），
 `owner` 必须写成数组 `['tongyin','chengfeng','kuangzuo']`，否则删任一方都会漏清或误清。
+多 owner 的回收条件是「玩家身上已不再拥有其中**任何**一个技能」（不是「都出现在本次被删集合」——
+后者在逐个删技能时永远凑不齐，实测不回收）。
 
 移去暂存区的牌要入弃牌堆时，用 `g.pushDiscardIfOrphan(card)`（牌已在任一标准区域则跳过），
 不要直接 `g.discardPile.push(...)`。

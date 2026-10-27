@@ -297,8 +297,8 @@ defineSkill({
       const b = (await ctx.ask.targets(p, { prompt: '【诡图】：选择第二名装备武器的角色', candidates: owners.filter((x) => x !== a), min: 1, max: 1 }))[0];
       if (!b) return;
       const rA = g.attackRange(a), rB = g.attackRange(b);
-      const wa = a.equips.weapon, wb = b.equips.weapon;
-      a.equips.weapon = wb; b.equips.weapon = wa;
+      // ★SG034 P0：交换武器必须走 swapEquipSlot（各自派 lose + change）
+      await g.swapEquipSlot(a, b, 'weapon', { reason: 'gueitu' });
       await ctx.log(`【诡图】：交换 ${a.name} 与 ${b.name} 的武器牌`);
       for (const [who, before] of [[a, rA], [b, rB]]) {
         if (g.attackRange(who) < before && who.hp < who.maxHp) {
