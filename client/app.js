@@ -463,10 +463,19 @@ function fxReset() {
 function fxSlotShow(ghost) {
   const host = document.getElementById('tableCenter');
   if (!host || !host.isConnected) return;
-  const cn = (ghost && ghost.querySelector && ghost.querySelector('.cn')?.textContent) || '';
   const slot = el('div', 'fx5-slot fx5-slot-in');
   slot.setAttribute('aria-hidden', 'true');
-  if (cn) slot.textContent = cn;
+  // v2：结算位直接显示这张牌的真牌面（花色/点数/牌名），不再是一个纯文字框
+  if (ghost && ghost.cloneNode) {
+    const face = ghost.cloneNode(true);
+    face.className = 'card fx5-face';
+    face.removeAttribute('data-cid');
+    face.removeAttribute('style');
+    slot.appendChild(face);
+  } else {
+    const cn = (ghost && ghost.textContent) || '';
+    if (cn) slot.textContent = cn;
+  }
   host.appendChild(slot);
   const tIn = fxMs('--fx5-t-slot-in', 180), tHold = fxMs('--fx5-t-hold', 700), tOut = fxMs('--fx5-t-slot-out', 200);
   fxLater(() => {
@@ -542,6 +551,18 @@ function fxFlyCards(ids) {
     anim.oncancel = done;
   });
 }
+// v2：把当前行动者座位卡滚进横向可视区（只动容器 scrollLeft，不带动整页）
+function fxScrollActiveIntoView() {
+  const box = document.getElementById('opponents');
+  if (!box) return;
+  const a = box.querySelector('.pcard.active');
+  if (!a) return;
+  if (box.scrollWidth <= box.clientWidth + 4) return;         // 没有溢出就不用动
+  const l = a.offsetLeft, w = a.offsetWidth, vw = box.clientWidth, sl = box.scrollLeft;
+  if (l < sl + 8) box.scrollLeft = Math.max(0, l - 12);
+  else if (l + w > sl + vw - 8) box.scrollLeft = l + w - vw + 12;
+}
+
 function fxSeatNode(seat) {
   if (S.seat != null && seat === S.seat) return document.getElementById('selfInfo');
   return document.querySelector(`#opponents .pcard[data-seat="${seat}"]`);
@@ -1764,13 +1785,25 @@ function renderTable() {
   const snap = S.snap;
   if (!snap || !snap.players) return;
   $('#topinfo').textContent = `第 ${snap.turn} 回合 · ${phaseCN(snap.phase)} · 牌堆 ${snap.deckCount}`;
+  // v2：牌堆数改到中央岛左下角徽标（≤10 张转琥珀色提醒）
+  const dk = document.getElementById('deckInfo');
+  if (dk) {
+    dk.textContent = `牌堆 ${snap.deckCount}`;
+    dk.classList.toggle('low', Number(snap.deckCount) <= 10);
+  }
   const me = S.seat != null ? snap.players[S.seat] : null;
   const opp = $('#opponents');
   opp.innerHTML = '';
-  for (const p of snap.players) {
-    if (me && p.seat === S.seat) continue;
-    opp.appendChild(playerCard(p, snap));
-  }
+  // v2：桌面按「网杀」三栏排布——对手分左右两列竖排，1 人时放中栏顶部。
+  //   这些类只在 ≥761px 的媒体查询里生效（display:contents 把 #opponents 拆开），手机上不起作用。
+  const others = snap.players.filter((p) => !(me && p.seat === S.seat));
+  const half = others.length >= 3 ? Math.ceil(others.length / 2) : (others.length === 2 ? 1 : 0);
+  others.forEach((p, i) => {
+    const card = playerCard(p, snap);
+    if (others.length === 1) card.classList.add('opp-t');
+    else card.classList.add(i < half ? 'opp-l' : 'opp-r');
+    opp.appendChild(card);
+  });
   if (me) {
     const canSelf = isTargetSelectable(me);
     const si = $('#selfInfo');
@@ -1780,6 +1813,12 @@ function renderTable() {
       + (canSelf ? ' · <b style="color:#d8b46a">点此选自己</b>' : '');
     si.classList.toggle('targetable', canSelf);
     si.classList.toggle('picked', canSelf && S.targets.includes(me.seat));
+    // v2：自己回合金线 / 需要我操作时高亮主按钮
+    const sa = document.getElementById('selfArea');
+    if (sa) {
+      sa.classList.toggle('my-turn', snap.currentIndex === me.seat);
+      sa.classList.toggle('need-act', !!(S.ask && S.ask.kind && (S.ask.seat == null || S.ask.seat === me.seat)));
+    }
     si.onclick = canSelf ? (() => toggleTarget(me.seat)) : null;
     renderSelfEquips(me);
     renderHand(me);
@@ -1787,6 +1826,8 @@ function renderTable() {
   const cur = snap.players[snap.currentIndex];
   $('#phaseInfo').innerHTML = cur ? `当前回合：<b>${esc(cur.name)}</b>（${esc(cur.generalName)}）` : '';
   $('#discardInfo').textContent = `弃牌堆 ${snap.discardCount} 张`;
+  // v2：行动者在横滑条里可能跑到屏外 → 渲染后把它滚进可视区
+  try { fxScrollActiveIntoView(); } catch {}
   syncAskOffset();
   // 不经过房间视图直接开新局（人数变化 / 回合数回退）：先清掉上一局的差分基线，避免全员飘「+N」
   const fxN = snap.players.length, fxTurn = Number(snap.turn) || 0;
@@ -1839,9 +1880,13 @@ function playerCard(p, snap) {
   if (isTargetSelectable(p)) {
     c.classList.add('targetable');
     c.onclick = () => toggleTarget(p.seat);
-    if (S.targets.includes(p.seat)) c.style.outline = '2px solid #d8b46a';
+    // v2：选中用 class（内联 outline 会被特效类覆盖）
+    c.classList.toggle('picked', S.targets.includes(p.seat));
   }
   const hpDots = Array.from({ length: p.maxHp }, (_, i) => `<i class="hpdot${i < p.hp ? ' on' : ''}"></i>`).join('');
+  // v2：行动者金环、低血红边（让「谁在行动 / 谁快死了」一眼可见）
+  c.classList.toggle('active', snap.currentIndex === p.seat);
+  c.classList.toggle('low', p.alive !== false && p.hp > 0 && p.hp <= 1);
   const roleTag = p.role ? `<div class="role${snap.over ? ' shown' : ''}">${roleCN(p.role)}</div>` : '';
   const markTags = [];
   for (const [label, v] of markEntries(p)) {
@@ -1977,6 +2022,8 @@ function renderHand(me) {
   row._fxOld = null;
   try { fxDrawIn(me); } catch {}
   try { fxTargetPaint(); } catch {}
+  // v2：手牌较多时自动重叠，保证每张仍有 ≥50px 可点宽度
+  row.classList.toggle('fx-overlap', row.children.length >= 7);
   renderActions(me);
 }
 
@@ -2659,6 +2706,8 @@ window.addEventListener('resize', () => {
 // 调试/验收钩子：供自动化测试直接驱动渲染函数（同源内部状态，不额外暴露敏感信息）
 window.__SGFN = { renderRoom, renderTable, renderActions, autoTargetSeats, renderPickModeChips, renderPickCountChips, refreshPickInfo, switchView, showOverlay, hideOverlay, renderAsk,
   // 真 AI 玩家相关：供自动化验收驱动（只读/渲染入口，不含任何密钥）
-  openRoomSettings, handleAiThink, syncAiThinking, refreshLLM };
+  openRoomSettings, handleAiThink, syncAiThinking, refreshLLM,
+  // UI v2（测试版）验收用
+  fxSlotShow, fxScrollActiveIntoView };
 
 init();

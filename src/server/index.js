@@ -15,7 +15,11 @@ import { makeRng } from '../engine/rng.js';
 import '../skills/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CLIENT_DIR = path.join(__dirname, '../../client');
+// 静态前端目录：测试版（UI v2）用独立实例跑同一份服务端代码，只换目录
+//   PORT=8031 CLIENT_DIR=/opt/sanguosha/client-v2 node src/server/index.js
+const CLIENT_DIR = process.env.CLIENT_DIR
+  ? path.resolve(process.env.CLIENT_DIR)
+  : path.join(__dirname, '../../client');
 const PORT = Number(process.env.PORT || 8030);
 const HOST = process.env.HOST || '0.0.0.0';
 const TURN_TIMEOUT = Number(process.env.TURN_TIMEOUT || 30000);

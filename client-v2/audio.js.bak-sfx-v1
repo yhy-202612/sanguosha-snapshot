@@ -1,0 +1,165 @@
+// 音效层（WebAudio 合成，零外部资源）
+// ------------------------------------------------------------------
+// 设计原则：
+// 1. 全部用振荡器 + 噪声缓冲实时合成，不加载任何音频文件（子路径部署、离线可用）。
+// 2. 懒初始化：AudioContext 在首次用户手势后才创建/resume（浏览器自动播放策略）。
+// 3. 每个音效都是短促的一次性节点，播完自动断开；同时最多 8 个活跃，防止爆音。
+// 4. 静音开关存 localStorage('sg_sfx_muted')，顶栏按钮切换。
+// 5. 音量克制（master 0.26），战斗中频繁触发也不刺耳。
+
+const KEY = 'sg_sfx_muted';
+
+let AC = null;
+let master = null;
+let noiseBuf = null;
+let active = 0;
+let muted = (() => {
+  try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
+})();
+
+export function isSfxOn() { return !muted; }
+
+export function setSfx(on) {
+  muted = !on;
+  try { localStorage.setItem(KEY, muted ? '1' : '0'); } catch {}
+  if (muted) stopAll();
+}
+
+export function toggleSfx() { setSfx(muted); return !muted; }
+
+function ctx() {
+  if (AC) {
+    if (AC.state === 'suspended') AC.resume().catch(() => {});
+    return AC;
+  }
+  const C = window.AudioContext || window.webkitAudioContext;
+  if (!C) return null;
+  AC = new C();
+  master = AC.createGain();
+  master.gain.value = 0.26;
+  master.connect(AC.destination);
+  // 0.4s 白噪声（复用）
+  const len = Math.floor(AC.sampleRate * 0.4);
+  noiseBuf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  return AC;
+}
+
+// 用户首次交互时解锁
+export function unlockSfx() {
+  const a = ctx();
+  if (a && a.state === 'suspended') a.resume().catch(() => {});
+}
+
+function stopAll() {
+  try { if (master) master.gain.setTargetAtTime(0, AC.currentTime, 0.01); } catch {}
+  try { if (master) setTimeout(() => { if (master) master.gain.value = 0.26; }, 120); } catch {}
+}
+
+function env(g, t0, a, d, peak = 1) {
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), t0 + a);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + a + d);
+}
+
+function tone({ type = 'sine', f0, f1, dur = 0.2, attack = 0.006, peak = 0.5, delay = 0 }) {
+  const a = AC;
+  const t0 = a.currentTime + delay;
+  const o = a.createOscillator();
+  const g = a.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f0, t0);
+  if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+  env(g, t0, attack, dur, peak);
+  o.connect(g).connect(master);
+  o.start(t0);
+  o.stop(t0 + dur + attack + 0.05);
+  return o;
+}
+
+function noise({ dur = 0.2, f = 1200, q = 1, type = 'bandpass', peak = 0.4, delay = 0, sweepTo = 0 }) {
+  const a = AC;
+  const t0 = a.currentTime + delay;
+  const s = a.createBufferSource();
+  s.buffer = noiseBuf;
+  const bp = a.createBiquadFilter();
+  bp.type = type;
+  bp.frequency.setValueAtTime(f, t0);
+  if (sweepTo) bp.frequency.exponentialRampToValueAtTime(Math.max(60, sweepTo), t0 + dur);
+  bp.Q.value = q;
+  const g = a.createGain();
+  env(g, t0, 0.004, dur, peak);
+  s.connect(bp).connect(g).connect(master);
+  s.start(t0);
+  s.stop(t0 + dur + 0.05);
+  return s;
+}
+
+const SFX = {
+  // UI 轻点
+  ui() { tone({ type: 'square', f0: 1180, f1: 900, dur: 0.045, peak: 0.12 }); },
+  // 出牌：气声扫过
+  card() {
+    noise({ dur: 0.22, f: 700, sweepTo: 2600, q: 0.9, peak: 0.34 });
+    tone({ type: 'sine', f0: 420, f1: 700, dur: 0.14, peak: 0.14 });
+  },
+  // 摸牌：清脆 tick
+  draw() {
+    tone({ type: 'triangle', f0: 980, f1: 1320, dur: 0.07, peak: 0.2 });
+    noise({ dur: 0.05, f: 3200, q: 2, peak: 0.12 });
+  },
+  // 受伤：低频闷响 + 噪声
+  hit(loud = false) {
+    tone({ type: 'sine', f0: 190, f1: 58, dur: 0.26, peak: loud ? 0.62 : 0.4 });
+    noise({ dur: 0.16, f: 420, q: 0.7, peak: loud ? 0.34 : 0.2, type: 'lowpass' });
+  },
+  // 回复：上行柔音
+  heal() {
+    tone({ type: 'sine', f0: 523, f1: 784, dur: 0.24, peak: 0.22 });
+    tone({ type: 'sine', f0: 784, f1: 1046, dur: 0.2, peak: 0.14, delay: 0.1 });
+  },
+  // 技能发动：金属铃
+  skill() {
+    tone({ type: 'sine', f0: 880, dur: 0.5, peak: 0.2 });
+    tone({ type: 'sine', f0: 1320, dur: 0.42, peak: 0.12, delay: 0.01 });
+    tone({ type: 'sine', f0: 1760, dur: 0.34, peak: 0.07, delay: 0.02 });
+  },
+  // 回合开始：低沉钟
+  turn() {
+    tone({ type: 'sine', f0: 220, f1: 196, dur: 0.7, peak: 0.24, attack: 0.01 });
+    tone({ type: 'sine', f0: 330, f1: 294, dur: 0.5, peak: 0.1, attack: 0.01 });
+  },
+  // 胜利：上行琶音
+  win() {
+    [523, 659, 784, 1046].forEach((f, i) => tone({ type: 'triangle', f0: f, dur: 0.22, peak: 0.24, delay: i * 0.1 }));
+  },
+  // 失败：下行
+  lose() {
+    [392, 330, 262].forEach((f, i) => tone({ type: 'sine', f0: f, dur: 0.34, peak: 0.26, delay: i * 0.16 }));
+  },
+  // 倒计时告警
+  tick() { tone({ type: 'square', f0: 1560, dur: 0.05, peak: 0.1 }); },
+};
+
+export function sfx(name, arg) {
+  if (muted) return;
+  const fn = SFX[name];
+  if (!fn) return;
+  const a = ctx();
+  if (!a || a.state !== 'running') return;
+  if (active >= 8) return;
+  active++;
+  try { fn(arg); } catch {}
+  setTimeout(() => { active = Math.max(0, active - 1); }, 420);
+}
+
+// 首次任意指针/键盘交互自动解锁（只绑一次）
+let bound = false;
+export function bindSfxUnlock() {
+  if (bound) return;
+  bound = true;
+  const h = () => { unlockSfx(); window.removeEventListener('pointerdown', h, true); window.removeEventListener('keydown', h, true); };
+  window.addEventListener('pointerdown', h, true);
+  window.addEventListener('keydown', h, true);
+}

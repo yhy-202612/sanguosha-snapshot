@@ -1,0 +1,184 @@
+/* =====================================================================
+   UI v2 覆盖层（测试版专用：/sanguo-test/）
+   设计目标（参考三国杀网杀布局 + 可读性优先）：
+     ① 中央**不再放牌堆卡背**——打出的牌落在中央，卡背与它重叠导致看不清；
+        牌堆/弃牌堆改成中央岛左右下角的极简徽标（不占位、不可点）。
+     ② 阶段胶囊与 AI 思考提示贴顶，中央真正留给「结算牌面」。
+     ③ 谁在行动、该我做什么、谁快死了 → 用描边/金线/主按钮高亮表达，而不是长文本。
+     ④ 手机：顶栏收敛（隐藏玩法、连接状态变圆点）、手牌≥7 张自动重叠、
+        按钮 ≥44px、战报改底部抽屉（不遮手牌）。
+   只在 client-v2 引用；正式版 style.css 不受影响。
+   ===================================================================== */
+
+:root{
+  --side:clamp(112px,15vw,184px);
+  --hit:44px;
+  --fx5-t-hold:1100ms;     /* 结算牌面停留时间：比原来 700ms 长，便于看清是什么牌 */
+}
+
+/* ---------- ① 中央信息岛 ---------- */
+#tableCenter::before{content:none!important;display:none!important}   /* 牌堆卡背：删除 */
+#tableCenter{
+  width:100%;margin:0;border-radius:var(--r4);gap:var(--s2);min-height:138px;
+  background:var(--grain),radial-gradient(ellipse at 50% 45%,rgba(64,44,22,.5),rgba(18,20,24,.35) 72%);
+  box-shadow:inset 0 0 0 1px rgba(216,180,106,.16),inset 0 0 40px rgba(0,0,0,.45);
+}
+#phaseInfo{
+  position:absolute;top:8px;left:50%;translate:-50% 0;max-width:92%;margin:0;
+  padding:4px 14px;font-size:var(--fs-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+#aiThinkHint{position:absolute;top:38px;left:50%;translate:-50% 0}
+/* 牌堆 / 弃牌堆：左下、右下角徽标 */
+#deckInfo,#discardInfo{
+  position:absolute;bottom:8px;display:flex;align-items:center;gap:6px;
+  padding:2px 10px;border-radius:var(--r-pill);
+  background:rgba(10,13,18,.72);border:1px solid var(--line);
+  font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums;
+  pointer-events:none;
+}
+#deckInfo{left:10px}
+#discardInfo{right:10px}
+#deckInfo::before{
+  content:"";width:10px;height:14px;border-radius:2px;
+  background:linear-gradient(160deg,#7c1d1a,#3f0e0c);border:1px solid var(--gold-3);
+}
+#deckInfo:empty{display:none}
+#deckInfo.low{color:var(--warn);border-color:var(--warn)}
+
+/* ---------- ② 结算牌面（真牌面，不再是一个文字框） ---------- */
+.fx5-slot{
+  padding:0;min-width:0;min-height:0;background:none;border:0;display:grid;place-items:center;
+}
+.fx5-slot .fx5-face{pointer-events:none;cursor:default;width:80px;height:112px}
+.fx5-slot .fx5-face .cn{font-size:18px}
+/* 询问面板出现时，牌面上移避让（否则被面板压住） */
+body:has(#askPanel:not(.hidden)) .fx5-slot{top:31%}
+body.ask-open .fx5-slot{top:31%}
+
+/* ---------- ③ 状态可读性 ---------- */
+/* 行动者：金环 + 名字后 ▸ */
+.pcard.active{box-shadow:inset 0 0 0 2px var(--brand-gold),0 0 18px rgba(216,180,106,.28)}
+.pcard.active .pn span:first-child::after{content:" ▸";color:var(--gold-2)}
+/* 低血（1 点及以下）：红边 */
+.pcard.low:not(.dead){border-color:var(--danger)}
+/* 已选目标：用 class（原来写内联 outline，与特效类互相覆盖） */
+.pcard.picked{outline:2px solid var(--brand-gold);outline-offset:2px}
+/* 自己回合：自己区顶部金线；需要我操作：主按钮呼吸 */
+#selfArea.my-turn{box-shadow:inset 0 2px 0 var(--brand-gold),0 -8px 24px rgba(216,180,106,.12)}
+#selfArea.need-act .actions button.primary{box-shadow:var(--ring-gold)}
+.actions button{min-height:var(--hit)}
+
+/* ---------- ④ 大屏：手牌放大、中央更宽 ---------- */
+@media (min-width:1100px){
+  #tableCenter{max-width:920px;margin-inline:auto}
+  .card{width:92px;height:128px}
+  .card .cn{font-size:22px}
+  .hand,#handRow{height:158px}
+}
+
+/* ---------- ⑤ 手机（竖屏为主） ---------- */
+@media (max-width:760px){
+  /* 顶栏：对局中隐藏「玩法」，连接状态只剩圆点，按钮够大 */
+  #app:has(#table:not(.hidden)) #btnHelp{display:none}
+  #conn{font-size:0;gap:0;min-width:10px}
+  #conn::before{width:8px;height:8px}
+  #topbar button{min-height:40px}
+
+  /* 对手座位：更紧凑，横向可滑 */
+  .opponents{padding:6px 2px 4px;gap:8px}
+  .pcard{min-width:92px;max-width:104px;padding:6px 7px}
+  .pcard .pk{display:none}
+  .pcard .pn{font-size:var(--fs-sm)}
+  .pcard .pg{font-size:var(--fs-xs)}
+  .pcard .meta{font-size:var(--fs-xs);gap:6px}
+
+  /* 中央岛压低，把高度让给手牌 */
+  #tableCenter{min-height:104px;border-radius:var(--r3)}
+  #phaseInfo{font-size:var(--fs-xs);padding:3px 10px;top:6px}
+  #aiThinkHint{top:32px;font-size:var(--fs-xs)}
+  #deckInfo,#discardInfo{bottom:6px;padding:1px 8px;font-size:10.5px}
+
+  /* 自己信息 / 装备条：单行横滑，不换行挤占手牌 */
+  #selfInfo,#selfEquips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  #selfInfo::-webkit-scrollbar,#selfEquips::-webkit-scrollbar{display:none}
+
+  /* 手牌：小牌 + 多张自动重叠（JS 给 .hand 加 fx-overlap） */
+  .hand,#handRow{height:130px;padding:14px 6px 8px}
+  .card{width:68px;height:96px}
+  .card .cn{font-size:16px;padding:0 4px}
+  .card .cs{font-size:11px;top:4px;left:5px}
+  .card .ct{font-size:9px;bottom:4px;right:5px}
+  .hand.fx-overlap .card:not(:first-child){margin-left:-16px}
+  .hand.fx-overlap .card.sel,.hand.fx-overlap .card.picked{z-index:4}
+
+  /* 战报：底部抽屉（不整屏遮盖手牌） */
+  #logPanel{
+    top:auto;bottom:0;height:56dvh;width:100%;z-index:60;
+    border-left:0;border-top:1px solid var(--gold-3);
+    border-radius:var(--r4) var(--r4) 0 0;
+    transform:translateY(100%);opacity:1;visibility:visible;
+    box-shadow:0 -16px 40px rgba(0,0,0,.55);
+  }
+  #logPanel.show,body.log-open #logPanel{transform:none}
+  body.log-open #table{margin-right:0}
+  #logPanel::before{
+    content:"";position:absolute;top:5px;left:50%;translate:-50% 0;
+    width:44px;height:4px;border-radius:2px;background:var(--line-2);
+  }
+  .log-head{min-height:44px;padding-top:10px}
+}
+
+/* ---------- ⑥ 手机横屏（高度紧张） ---------- */
+@media (orientation:landscape) and (max-height:480px){
+  #tableCenter{min-height:88px;margin:2px auto}
+  #phaseInfo{top:5px;padding:2px 10px;font-size:10.5px}
+  #aiThinkHint{display:none}
+  #deckInfo,#discardInfo{bottom:4px;font-size:10px}
+  .hand,#handRow{height:104px;padding:10px 4px 4px}
+  .card{width:64px;height:90px}
+  .fx5-slot .fx5-face{width:64px;height:90px}
+}
+
+
+/* ---------- ⑧ 桌面/横屏：网杀式三栏（左右对手纵列 + 中央出牌区 + 底部自己区） ---------- */
+@media (min-width:761px),(orientation:landscape) and (max-height:480px){
+  #table{
+    display:grid;
+    grid-template-columns:var(--side) minmax(0,1fr) var(--side);
+    grid-template-rows:auto minmax(0,1fr) auto;
+    grid-template-areas:"l c r" "l c r" "s s s";
+    gap:var(--s2) var(--s3);
+    padding:var(--s2) var(--s3) 0;
+  }
+  /* 把 #opponents 拆成 grid 子项：.opp-l 左列、.opp-r 右列、.opp-t 中栏顶部 */
+  #opponents{display:contents}
+  .opp-l,.opp-r{
+    display:flex;flex-direction:column;gap:var(--s2);min-width:0;
+    justify-content:center;overflow-y:auto;overscroll-behavior:contain;
+    padding:2px;
+  }
+  .opp-l{grid-area:l}
+  .opp-r{grid-area:r}
+  .opp-l .pcard,.opp-r .pcard{max-width:none;width:100%;min-width:0}
+  /* 单人对手：中栏顶部一条 */
+  .opp-t{grid-area:c;align-self:start;justify-self:center;max-width:420px;width:100%;margin-bottom:2px}
+  /* 中央出牌区：中栏，垂直居中 */
+  #tableCenter{grid-area:c;align-self:center;justify-self:stretch;min-height:150px}
+  /* 自己区：跨满三栏 */
+  #selfArea{grid-area:s}
+  /* 侧列里的座位卡更紧凑（网杀风格：信息竖排、不撑宽） */
+  .opp-l .pcard,.opp-r .pcard{padding:7px 8px}
+  .opp-l .pcard .meta,.opp-r .pcard .meta{gap:6px;font-size:var(--fs-xs)}
+  .opp-l .pcard .eq-row,.opp-r .pcard .eq-row{flex-wrap:wrap;gap:4px}
+}
+
+/* 窄桌面/横屏（1024 以下）把侧列压窄，保证中央还有空间 */
+@media (min-width:761px) and (max-width:1100px){
+  :root{--side:clamp(96px,12vw,132px)}
+  .opp-l .pcard .pg,.opp-r .pcard .pg{font-size:var(--fs-xs)}
+}
+
+/* ---------- ⑦ 降级（减少动效时不做位移/呼吸） ---------- */
+@media (prefers-reduced-motion:reduce){
+  #logPanel{transition:none}
+}

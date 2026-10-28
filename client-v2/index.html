@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>三国杀 · 在线对战</title>
+<link rel="stylesheet" href="./style.css" />
+<link rel="stylesheet" href="./v2.css" />
+</head>
+<body>
+<div id="app">
+  <!-- 顶栏 -->
+  <header id="topbar">
+    <div class="brand">三国杀<span>·在线</span></div>
+    <div id="topinfo"></div>
+    <div class="spacer"></div>
+    <button id="btnSkills" class="ghost hidden">技能</button>
+    <button id="btnAuto" class="ghost hidden">托管</button>
+    <button id="btnLog" class="ghost hidden" aria-controls="logPanel" aria-expanded="false">战报</button>
+    <button id="btnSfx" class="ghost" type="button" aria-pressed="true" title="切换音效（合成音，无外部资源）">音效开</button>
+    <button id="btnHelp" class="ghost">玩法</button>
+    <div id="conn" class="conn">未连接</div>
+  </header>
+
+  <!-- 大厅 -->
+  <section id="lobby" class="screen">
+    <div class="panel">
+      <h2>创建对局</h2>
+      <div class="row"><label>模式</label><div id="modeList" class="chips"></div></div>
+      <div class="row"><label>武将包</label><div id="packList" class="chips"></div></div>
+      <div class="row">
+        <label>选将</label>
+        <div id="pickModeList" class="chips"></div>
+      </div>
+      <div class="row" id="pickCountRow">
+        <label>几选一</label>
+        <div id="pickCountList" class="chips"></div>
+      </div>
+      <div class="row" id="dualRow">
+        <label>双将</label>
+        <label class="check"><input id="dualOn" type="checkbox" /> 双将：体力取平均（向上取整），护甲相加</label>
+      </div>
+      <div class="row" id="hostRoleRow">
+        <label>房主身份</label>
+        <label class="check"><input id="hostRoleOn" type="checkbox" /> 自选（身份场 / 军争）</label>
+        <select id="hostRoleSel" class="pick-select" disabled>
+          <option value="lord">主公</option>
+          <option value="loyalist">忠臣</option>
+          <option value="rebel">反贼</option>
+          <option value="renegade">内奸</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>我的武将</label>
+        <select id="hostPick" class="pick-select"><option value="">（随机）</option></select>
+      </div>
+      <div class="row col">
+        <label class="w-auto">自定义将池<button id="btnPoolToggle" class="ghost mini" type="button">展开</button></label>
+        <div id="poolBox" class="pool-box hidden">
+          <div class="pool-tools">
+            <button id="btnPoolAll" class="ghost mini" type="button">全选</button>
+            <button id="btnPoolNone" class="ghost mini" type="button">清空</button>
+            <span id="poolCount" class="pool-count">随武将包</span>
+          </div>
+          <div id="poolList" class="pool-list"></div>
+        </div>
+      </div>
+      <div class="row"><label>人数</label><input id="seatCount" type="number" min="2" max="8" value="3" /></div>
+      <div class="row"><label>昵称</label><input id="nickname" type="text" maxlength="12" placeholder="输入你的昵称" /></div>
+      <div class="row">
+        <label>填充</label>
+        <label class="check"><input id="aiFill" type="checkbox" checked /> 用电脑补足人数（单人也能玩）</label>
+      </div>
+      <div class="row">
+        <label>托管</label>
+        <label class="check"><input id="autoOn" type="checkbox" /> 未操作 <input id="autoSec" class="sec-input" type="number" min="5" max="180" value="15" /> 秒后交给电脑</label>
+      </div>
+      <button id="btnCreate" class="primary">创建房间</button>
+      <div class="hint">创建后可复制房间号邀请同学加入；3 人以上即自动开 AI。将池留空则按所选武将包随机。</div>
+    </div>
+
+    <div class="panel">
+      <h2>加入房间</h2>
+      <div class="row"><label>房间号</label><input id="joinId" type="text" placeholder="例如 R1a2b" /></div>
+      <div class="row"><label>昵称</label><input id="joinName" type="text" maxlength="12" placeholder="输入你的昵称" /></div>
+      <button id="btnJoin" class="secondary">加入</button>
+    </div>
+
+    <div class="panel wide">
+      <h2>武将一览</h2>
+      <div id="generalList" class="generals"></div>
+    </div>
+
+    <div class="panel wide">
+      <h2>其他在线版本（第三方开源项目）</h2>
+      <div class="alt-list">
+        <a class="alt-card" href="/sanguo-kevin/" target="_blank" rel="noopener">
+          <b>Sanguosha English（kevinychen）</b>
+          <span>英文联机版开源实现，标准包 + 扩展武将；手动操作模式（不强制校验规则），适合对照英文卡面与打法</span>
+        </a>
+      </div>
+      <div class="hint">
+        无名杀（noname）等实现依赖「根路径 + Service Worker」，在子路径下无法通过其启动校验，暂不提供入口。
+        本站主程序（/sanguo/）已包含 7 种模式、77 名武将（标准 / 界 / 谋 / 神 / 极）。
+      </div>
+    </div>
+  </section>
+
+  <!-- 房间等待 -->
+  <section id="room" class="screen hidden">
+    <div class="panel room-panel">
+      <h2 id="roomTitle">房间</h2>
+      <div id="roomSeats" class="seats"></div>
+      <div id="roomConfig"></div>
+      <div class="row">
+        <button id="btnReady" class="secondary hidden">准备</button>
+        <button id="btnStart" class="primary">开始对局</button>
+        <button id="btnCopy" class="ghost">复制房间号</button>
+      </div>
+      <div class="hint">房主才能开始；第一局可直接开始，之后需要所有真人玩家点「准备」。打完后房间会保留，所有人退出 5 分钟后自动回收。</div>
+    </div>
+  </section>
+
+  <!-- 对局桌面 -->
+  <section id="table" class="screen hidden">
+    <div id="opponents" class="opponents"></div>
+    <div id="tableCenter">
+      <div id="phaseInfo"></div>
+      <div id="aiThinkHint" class="ai-think-hint"></div>
+      <div id="deckInfo"></div>
+      <div id="discardInfo"></div>
+    </div>
+    <div id="selfArea">
+      <div id="selfInfo"></div>
+      <div id="selfEquips" class="equip-bar"></div>
+      <div id="handRow" class="hand"></div>
+      <div id="actionBar" class="actions"></div>
+    </div>
+  </section>
+
+  <!-- 日志 -->
+  <aside id="logPanel">
+    <div class="log-head">
+      <span>战报</span>
+      <span class="log-tools">
+        <button id="btnLogClear" class="ghost" type="button">清空</button>
+        <button id="btnLogClose" class="ghost" type="button">收起</button>
+      </span>
+    </div>
+    <div id="logList"></div>
+  </aside>
+
+  <!-- 询问面板 -->
+  <div id="askPanel" class="hidden"></div>
+  <!-- 结算 -->
+  <div id="overlay" class="hidden"></div>
+</div>
+<script src="./app.js" type="module"></script>
+</body>
+</html>
