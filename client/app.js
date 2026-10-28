@@ -14,6 +14,8 @@ const S = {
   packs: new Set(['standard']), pool: new Set(), pickMode: 'random',
   pickCount: 3, dual: false, pickInfo: null, hostRole: null,
   autoCfg: { enabled: false, seconds: 15 }, room: null,
+  // AI 大模型（房间可选）：providers 由 /api/llm-status 下发，只含模型名与是否就绪，绝不含密钥
+  llm: { enabled: false, providers: {} }, aiThink: {},
   tipTimer: null, tipHideTimer: null, suppressClickUntil: 0, toastEl: null,
 };
 
@@ -38,6 +40,18 @@ async function init() {
   refreshHostPick();
   renderGenerals();
   bind();
+  refreshLLM();   // 异步拉一次「哪些大模型可用」，失败不影响开局
+}
+
+// 大模型可用性（只读）：供房间设置显示「DeepSeek 就绪 / GLM 未配置」
+async function refreshLLM() {
+  try {
+    const r = await api('/api/llm-status', null, 'GET');
+    S.llm = { enabled: !!r.enabled, providers: r.providers || {} };
+  } catch {
+    S.llm = { enabled: false, providers: {} };
+  }
+  return S.llm;
 }
 
 function renderModeChips() {
@@ -1130,6 +1144,9 @@ async function openRoomSettings(room) {
     hostRole: room.hostRole || '',
     customPool: undefined,   // undefined = 不改；null = 清空
     auto: {},
+    aiBrain: room.aiBrain || 'builtin',
+    aiModel: room.aiModel || 'deepseek',
+    aiLevel: room.aiLevel || 'low',
   };
   for (const s of room.seats || []) {
     if (!s.isAI) st.auto[s.index] = { enabled: !!s.auto, seconds: s.autoSeconds || 15 };
@@ -1209,6 +1226,44 @@ async function openRoomSettings(room) {
       body.querySelector('#rsHostRole').onchange = (e) => { st.hostRole = e.target.value; };
     }
 
+    // AI 大脑：电脑座位由内置启发式还是真大模型接管（密钥只在服务器，前端只看到模型名）
+    body.appendChild(el('div', 'hint', '电脑玩家的 AI 大脑'));
+    const provs = Object.entries(S.llm.providers || {});
+    const anyReady = provs.some(([, v]) => v.ready);
+    const br = el('div', 'chips');
+    for (const [v, label, ready] of [
+      ['builtin', '内置启发式（快，0 延迟）', true],
+      ['llm', '大模型 · 真 AI（约 3~8 秒思考）', !!(S.llm.enabled && anyReady)],
+    ]) {
+      const c = el('div', 'chip' + (st.aiBrain === v ? ' on' : '') + (ready ? '' : ' dis'), label);
+      if (ready) c.onclick = () => { st.aiBrain = v; rebuild(); };
+      br.appendChild(c);
+      if (!ready) c.title = '服务器未配置该模型密钥';
+    }
+    body.appendChild(br);
+
+    if (st.aiBrain === 'llm') {
+      body.appendChild(el('div', 'hint', '模型（只列出服务器已配密钥的）'));
+      const md = el('div', 'chips');
+      if (!provs.length) md.appendChild(el('div', 'hint', '服务器未配置任何大模型密钥'));
+      for (const [id, info] of provs) {
+        const c = el('div', 'chip' + (st.aiModel === id ? ' on' : '') + (info.ready ? '' : ' dis'), `${esc(info.label)} · ${esc(info.model)}`);
+        if (info.ready) c.onclick = () => { st.aiModel = id; rebuild(); };
+        md.appendChild(c);
+      }
+      body.appendChild(md);
+
+      body.appendChild(el('div', 'hint', '强度'));
+      const lv = el('div', 'chips');
+      for (const [v, label] of [['low', '普通：只在出牌阶段思考'], ['high', '高：出牌 + 被杀/决斗等关键响应也思考']]) {
+        const c = el('div', 'chip' + (st.aiLevel === v ? ' on' : ''), label);
+        c.onclick = () => { st.aiLevel = v; rebuild(); };
+        lv.appendChild(c);
+      }
+      body.appendChild(lv);
+      body.appendChild(el('div', 'hint', '电脑思考时座位上会显示「思考中」，战报会记下它选了什么、为什么；接口连续失败会自动切回内置 AI，不会卡住对局。'));
+    }
+
     // 各玩家托管时长（房主可为每个座位分别调整）
     body.appendChild(el('div', 'hint', '各玩家托管时长（房主可为每个座位单独设置；电脑座位无需托管）'));
     const list = el('div', '');
@@ -1233,6 +1288,7 @@ async function openRoomSettings(room) {
     const body = {
       token: S.token, packs: [...st.packs], pickMode: st.pickMode, pickCount: st.pickCount,
       dual: st.dual, hostRole: st.hostRole || null, maxSeats: st.maxSeats,
+      aiBrain: st.aiBrain, aiModel: st.aiModel, aiLevel: st.aiLevel,
     };
     if (st.customPool !== undefined) body.customPool = st.customPool;   // null = 显式清空自定义将池
     if (withFill) body.fillAI = true;
@@ -1465,11 +1521,13 @@ function renderRoom(room) {
   let fxSi = 0;
   for (const s of room.seats) {
     const c = el('div', 'seatcard' + (s.online ? '' : ' off') + (s.ready ? ' ready' : ''));
+    c.dataset.seat = String(s.index);
     const ids = s.generalIds && s.generalIds.length ? s.generalIds : (s.generalId ? [s.generalId] : []);
     const gm = s.generalNames && s.generalNames.length ? s.generalNames.join(' + ') : (ids.length ? ids.map(generalNameOf).join(' + ') : (s.generalName || '待分配'));
     c.innerHTML = `<div class="n">${esc(s.name)}${s.isAI ? '（电脑）' : ''}${s.index === S.seat ? '（你）' : ''}${s.auto ? ` · 托管 ${s.autoSeconds || 15}s` : ''}</div>
       <div class="g">${esc(gm)}</div>
-      ${(room.round || 0) > 0 && !s.isAI ? `<div class="rdy">${s.ready ? '✔ 已准备' : '… 未准备'}</div>` : ''}`;
+      ${(room.round || 0) > 0 && !s.isAI ? `<div class="rdy">${s.ready ? '✔ 已准备' : '… 未准备'}</div>` : ''}
+      <div class="think"></div>`;
     fxNextRdy.set(s.index, !!s.ready);
     if (!reduceMotion()) {
       if (!fxPrevRdy) {
@@ -1482,6 +1540,7 @@ function renderRoom(room) {
     }
     box.appendChild(c);
   }
+  syncAiThinking();
   FX.seatReady = fxNextRdy;
   // 房间配置与选将入口
   const cfg = $('#roomConfig');
@@ -1492,6 +1551,13 @@ function renderRoom(room) {
     if (room.pickMode === 'draw') bits.push(`几选一：${room.pickCount || 3} 选 1`);
     bits.push(room.dual ? '双将' : '单将');
     if (room.customPool && room.customPool.length) bits.push(`自定义将池 ${room.customPool.length} 名`);
+    if (room.aiBrain === 'llm') {
+      const pv = (S.llm.providers || {})[room.aiModel];
+      const nm = pv?.label || (room.aiModel === 'glm' ? 'GLM' : 'DeepSeek');
+      bits.push(`电脑 AI：${nm}${pv?.model ? ' · ' + pv.model : ''}（${room.aiLevel === 'high' ? '高强度' : '普通'}）`);
+    } else {
+      bits.push('电脑 AI：内置');
+    }
     if (S.seat === 0 && IDENTITY_MODE_IDS.includes(room.modeId)) {
       bits.push(`房主身份：${S.hostRole ? roleCN(S.hostRole) : '主公（默认）'}`);
     }
@@ -1548,6 +1614,78 @@ function renderRoom(room) {
   }
 }
 
+// ============ AI 大模型（真 AI 玩家）的思考过程 ============
+// 服务端 ai-think 事件的四态：start 开始思考 / done 选定动作 / miss 未给出可用决策 / dead 熔断降级
+// 目的：把「为什么这局有点慢」变成「看到了电脑在想什么」，而不是空等
+let aiTickTimer = null;
+
+function aiSeatName(seat) {
+  return S.room?.seats?.find(s => s.index === seat)?.name || `座 ${seat + 1}`;
+}
+
+function syncAiThinking() {
+  const on = S.aiThink || {};
+  const now = Date.now();
+  for (const k of Object.keys(on)) if (now - on[k].since > 40000) delete on[k];   // 防残留（服务端异常时不会一直显示思考中）
+  const seats = Object.keys(on);
+  // ① 房间视图：座位卡片上的小字
+  for (const card of document.querySelectorAll('#roomSeats .seatcard')) {
+    const t = card.querySelector('.think');
+    if (!t) continue;
+    const info = on[card.dataset.seat];
+    if (info) {
+      const sec = Math.round((now - info.since) / 1000);
+      t.textContent = `🤖 大模型思考中${sec ? ` ${sec}s` : '…'}`;
+      t.classList.add('on');
+    } else {
+      t.textContent = '';
+      t.classList.remove('on');
+    }
+  }
+  // ② 桌面视图：中央提示（对局中座位卡片不可见，靠这里看是谁在想）
+  const hint = document.querySelector('#aiThinkHint');
+  if (hint) {
+    if (seats.length) {
+      const info = on[seats[0]];
+      const sec = Math.round((now - info.since) / 1000);
+      hint.textContent = `🤖 ${aiSeatName(Number(seats[0]))} 正在思考${sec ? `（${sec}s）` : '…'}`;
+      hint.classList.add('on');
+    } else {
+      hint.textContent = '';
+      hint.classList.remove('on');
+    }
+  }
+}
+
+function aiThinkTick() {
+  if (!Object.keys(S.aiThink || {}).length) {
+    if (aiTickTimer) { clearInterval(aiTickTimer); aiTickTimer = null; }
+  }
+  syncAiThinking();
+}
+
+function handleAiThink(ev) {
+  if (!ev || !Number.isFinite(ev.seat)) return;
+  if (!S.aiThink) S.aiThink = {};
+  if (ev.phase === 'start') {
+    S.aiThink[ev.seat] = { since: Date.now(), tag: ev.tag || 'play', count: ev.count || 0 };
+    if (!aiTickTimer) aiTickTimer = setInterval(aiThinkTick, 1000);
+  } else {
+    delete S.aiThink[ev.seat];
+  }
+  syncAiThinking();
+  if (ev.phase === 'start') return;
+  const nm = aiSeatName(ev.seat);
+  const sec = ((ev.ms || 0) / 1000).toFixed(1);
+  if (ev.phase === 'done') {
+    addLog({ text: `🤖 ${nm} 想了 ${sec}s → ${ev.label}${ev.why ? `（${ev.why}）` : ''}` });
+  } else if (ev.phase === 'miss') {
+    addLog({ text: `🤖 ${nm} 大模型未给出可用决策（${ev.reason || '未知'}），本次改用内置 AI` });
+  } else if (ev.phase === 'dead') {
+    addLog({ text: `⚠ ${nm} 的大模型连续 ${ev.count || 3} 次失败，本局改由内置 AI 接管` });
+  }
+}
+
 function generalNameOf(id) {
   return (S.meta?.generals || []).find(g => g.id === id)?.name || id;
 }
@@ -1601,6 +1739,7 @@ function connect() {
   });
   es.addEventListener('state', (e) => { S.snap = JSON.parse(e.data); if (S.snap?.players) { switchView('table'); renderTable(); } });
   es.addEventListener('log', (e) => { addLog(JSON.parse(e.data)); });
+  es.addEventListener('ai-think', (e) => { try { handleAiThink(JSON.parse(e.data)); } catch {} });
   es.addEventListener('notice', (e) => {
     let d = {};
     try { d = JSON.parse(e.data); } catch {}
@@ -2518,6 +2657,8 @@ window.addEventListener('resize', () => {
 });
 
 // 调试/验收钩子：供自动化测试直接驱动渲染函数（同源内部状态，不额外暴露敏感信息）
-window.__SGFN = { renderRoom, renderTable, renderActions, autoTargetSeats, renderPickModeChips, renderPickCountChips, refreshPickInfo, switchView, showOverlay, hideOverlay, renderAsk };
+window.__SGFN = { renderRoom, renderTable, renderActions, autoTargetSeats, renderPickModeChips, renderPickCountChips, refreshPickInfo, switchView, showOverlay, hideOverlay, renderAsk,
+  // 真 AI 玩家相关：供自动化验收驱动（只读/渲染入口，不含任何密钥）
+  openRoomSettings, handleAiThink, syncAiThinking, refreshLLM };
 
 init();

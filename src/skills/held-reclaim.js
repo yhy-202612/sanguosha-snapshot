@@ -54,7 +54,19 @@ registerHeldContainer(flagsArr('hanCards', 'bc_qiuan'));        // 【嵌函】�
 registerHeldContainer(flagsArr('renCards', 'youyi'));           // 【游医】「仁」区（shenwu；★不能叫 ren）
 registerHeldContainer(flagsArr('m5Qj', 'm5_qingjian'));         // 【清俭】（mou5）
 // 【破军】「寇」：同样置于**目标**身上（mou5:316-334），需 crossPlayer（SG034 P1）
-registerHeldContainer({ ...flagsArr('m5Kou', 'm5_pojun'), crossPlayer: true });
+// 【破军】「寇」（mou5）与「军」（yj2011）都会把牌放在**别人**身上，故需 crossPlayer 扫全桌。
+// ★SG035-r2 P1：必须带 fromSeat —— 同一目标可能被多名施放者扣置，
+//   回收时只能退「自己扣的那批」，否则无关角色死亡/失技会把全桌的牌一起扫进弃牌堆。
+registerHeldContainer({
+  key: 'flags.m5Kou', owner: 'm5_pojun', crossPlayer: true,
+  fromSeat: (c) => c?.heldFrom,
+  get: (p) => p.flags?.m5Kou,
+  // 只删 taken 里的牌：其它施放者扣置的牌必须留在目标身上
+  clear: (p, taken) => {
+    const drop = new Set(taken || []);
+    if (p.flags) p.flags.m5Kou = (p.flags.m5Kou || []).filter(c => !drop.has(c));
+  },
+});
 // 「刺」：**由【独往】创建并维护**（qunying.js:143），【刺北】只读取/消耗（SG032 A2 实测：
 // 登记成 cibei 会「删 duwang 漏 ci、删 cibei 误清 ci」，两个方向都错）。
 registerHeldContainer(flagsArr('ci', 'duwang'));
@@ -163,6 +175,7 @@ registerHeldContainer({
 registerHeldContainer({
   key: 'jun', owner: 'pojun',
   crossPlayer: true,   // 牌置于**目标**武将牌上：施放者失技/阵亡时也要回收（SG034 P1）
+  fromSeat: (c) => c?.heldFrom,   // ★SG035-r2 P1：只退自己扣的牌
   get: (p) => p.jun,
   clear: (p, taken) => {
     const drop = new Set(taken || []);

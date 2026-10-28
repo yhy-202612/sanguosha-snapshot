@@ -1061,6 +1061,8 @@ function spyAsks(g) {
   const ev = [];
   const orig = g.trigger.bind(g);
   g.trigger = async (e, d) => { if (e === 'equip.lose' || e === 'equip.change') ev.push(`${e}:${d.self.name}:${d.slot}:${d.card ? d.card.name : 'null'}`); return orig(e, d); };
+  // ★SG035-r2：先让精械弩「真正生效」（否则下面两条是空断言——dsh 指出 T48d/e/g 从未置 true）
+  a.flags.shaUnlimited = true;
   await g.swapEquipSlot(a, b, 'weapon', { reason: 'test' });
   ok(a.equips.weapon === qg && b.equips.weapon === jx, 'T48a 交换后双方武器应对调');
   ok(ev.filter(x => x.startsWith('equip.lose')).length === 2, `T48b 双方各派 1 次 lose（实际 ${ev.filter(x => x.includes('lose')).length}）`);
@@ -1069,9 +1071,11 @@ function spyAsks(g) {
   ok(b.flags.shaUnlimited !== true, `T48e 接收方也不得凭空获得 shaUnlimited（实际 ${b.flags.shaUnlimited}）`);
   // 冠武式「凭空换上」：旧装备必须派 lose 并进弃牌堆
   const p2 = g.players[2];
+  p2.skills = [getSkill('rx_jingxie')];     // 清 shaUnlimited 的是精械自己的 lose 监听，必须挂在 p2 身上
   p2.equips = { weapon: jx, armor: null, horsePlus: null, horseMinus: null, treasure: null };
   const ql = mk('qinglong'); ql.sub = 'weapon';
   g.discardPile = [];
+  p2.flags.shaUnlimited = true;      // 同上：先真的置 true，再断言被清
   await g.forceEquip(p2, ql, { reason: 'test' });
   ok(p2.equips.weapon === ql && g.discardPile.some(c => c.id === jx.id),
     'T48f forceEquip 应换上新武器并把旧武器放进弃牌堆');
@@ -1146,6 +1150,119 @@ function spyAsks(g) {
     `T52b 只删【统荫】时不得回收仍被【承奉】使用的「匡祚」（实际 ${(p0.flags.kuangzuo || []).length}）`);
   await g.removeSkills(p0, ['chengfeng']);
   ok((p0.flags.kuangzuo || []).length === 0, 'T52c 两方都失去后才应回收');
+}
+
+
+// ---------------- T53 【封乡】驱动技能本体：交换装备必须派 lose + change（SG035-r2 P0） ----------------
+// dsh 指出 T48 只调 helper、不驱动技能本体，所以漏掉了封乡这第 4 处「直接给 equips 赋值」。
+// 这里真的触发 damage.after 让【封乡】自己跑，并带上精械技能验证标记被清。
+{
+  const g = newGame(2);
+  const p0 = g.players[0], p1 = g.players[1];
+  p0.skills = [getSkill('jh_fengxiang'), getSkill('rx_jingxie')];
+  const jx = mk('zhuge_jx'); jx.sub = 'weapon';
+  const qg = mk('qinggang'); qg.sub = 'weapon';
+  p0.equips = { weapon: jx, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  p1.equips = { weapon: qg, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  p0.flags.shaUnlimited = true;      // 精械弩已生效
+  const ev = [];
+  const orig = g.trigger.bind(g);
+  g.trigger = async (e, d) => { if (e === 'equip.lose' || e === 'equip.change') ev.push(e); return orig(e, d); };
+  g.responder = {
+    askPlay: async () => ({ endPhase: true }),
+    ask: async (_gg, _pl, req) => (req.kind === 'targets' ? { seats: [p1.seat] } : { yes: true }),
+  };
+  await g.trigger('damage.after', { self: p0, player: p0, to: p0, from: p1, amount: 1, card: null, reason: 'test' });
+  ok(p0.equips.weapon === qg && p1.equips.weapon === jx, 'T53a 封乡应交换双方武器');
+  ok(ev.filter(x => x === 'equip.lose').length >= 2, `T53b 双方都须派 equip.lose（实际 ${ev.filter(x => x === 'equip.lose').length}）`);
+  ok(ev.filter(x => x === 'equip.change').length >= 2, `T53c 双方都须派 equip.change（实际 ${ev.filter(x => x === 'equip.change').length}）`);
+  ok(p0.flags.shaUnlimited !== true, `T53d 精械弩换走后不得残留 shaUnlimited（实际 ${p0.flags.shaUnlimited}）`);
+}
+
+// ---------------- T54 【让节】坐骑必须进坐骑槽（SG035-r2 P1：dslot 用了 horsePlus 当 key） ----------------
+{
+  const g = newGame(3);
+  const p0 = g.players[0], p1 = g.players[1], p2 = g.players[2];
+  p0.skills = [getSkill('rx_rangjie')];
+  const horse = mk('chitu'); horse.sub = 'horse+';
+  p1.equips = { weapon: null, armor: null, horsePlus: horse, horseMinus: null, treasure: null };
+  const wq = mk('qinggang'); wq.sub = 'weapon';
+  p2.equips = { weapon: wq, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  const seen = {};
+  g.responder = {
+    askPlay: async () => ({ endPhase: true }),
+    ask: async (_gg, _pl, req) => {
+      if (req.kind === 'confirm') return { yes: true };
+      if (req.kind === 'choice') {
+        const o = req.options || [];
+        if (req.prompt.includes('选择一项')) return { index: o.findIndex(x => /移动场上的一张牌/.test(String(x))) };
+        return { index: o.findIndex(x => /装备区/.test(String(x))) };   // 选坐骑那张
+      }
+      if (req.kind === 'targets') return { seats: [p2.seat] };
+      return null;
+    },
+  };
+  const orig = g.trigger.bind(g);
+  g.trigger = async (e, d) => { if (e === 'equip.change' && d.self === p2) seen.slot = d.slot, seen.old = d.old; return orig(e, d); };
+  await g.trigger('damage.after', { self: p0, player: p0, to: p0, from: p1, amount: 1, card: null, reason: 'test' });
+  ok(p2.equips.horsePlus === horse, `T54a 坐骑必须落在 horsePlus 槽（实际 ${p2.equips.horsePlus ? '对' : '未落槽'}）`);
+  ok(p2.equips.weapon === wq, `T54b 坐骑不得占用武器栏，目标原武器应原样保留（实际 ${p2.equips.weapon ? p2.equips.weapon.name : '空'}）`);
+  ok(g.discardPile.some(c => c.id === wq.id) === false, 'T54c 不得因坐骑误弃目标原武器');
+  ok(seen.slot === 'horsePlus', `T54d equip.change 的 slot 应为 horsePlus（实际 ${seen.slot}）`);
+  ok(seen.old === null, `T54e 空槽位交换时 old 应为 null（实际 ${seen.old && seen.old.name}）`);
+}
+
+// ---------------- T55 crossPlayer 容器：只回收自己扣的牌（SG035-r2 P1） ----------------
+{
+  const g = newGame(3);
+  const a = g.players[0], b = g.players[1], t = g.players[2];
+  a.skills = [getSkill('m5_pojun')];
+  b.skills = [getSkill('m5_pojun')];
+  const c1 = mk('sha'), c2 = mk('shan');
+  c1.heldFrom = a.seat; c2.heldFrom = b.seat;
+  t.flags.m5Kou = [c1, c2];
+  g.discardPile = [];
+  await g.removeSkills(a, ['m5_pojun']);
+  ok(g.discardPile.some(c => c.id === c1.id), 'T55a 自己扣的牌必须回收进弃牌堆');
+  ok((t.flags.m5Kou || []).some(c => c.id === c2.id),
+    `T55b 别人扣的牌必须留在目标身上（实际剩 ${(t.flags.m5Kou || []).length}）`);
+  ok(!g.discardPile.some(c => c.id === c2.id), 'T55c 不得把别人扣的牌也扫进弃牌堆');
+  // 无关角色死亡（全量回收）同样不能动别人的牌
+  const g2 = newGame(3);
+  const a2 = g2.players[0], b2 = g2.players[1], t2 = g2.players[2];
+  a2.skills = [getSkill('m5_pojun')]; b2.skills = [getSkill('m5_pojun')];
+  const d1 = mk('sha'), d2 = mk('shan');
+  d1.heldFrom = a2.seat; d2.heldFrom = b2.seat;
+  t2.flags.m5Kou = [d1, d2];
+  g2.discardPile = [];
+  await g2.reclaimHeld(a2, { onlyOwners: null });   // 等价于 a2 死亡
+  ok((t2.flags.m5Kou || []).some(c => c.id === d2.id), 'T55d 死亡全量回收时也不得扫走别人扣的牌');
+}
+
+// ---------------- T56 极庞统【穷谋】：谋略上限 10 + 复活回满血 ----------------
+{
+  const g = newGame(2);
+  const p0 = g.players[0];
+  p0.skills = [getSkill('qiongmou'), getSkill('chiheng')];
+  g.responder = { askPlay: async () => ({ endPhase: true }), ask: async () => ({ yes: true }) };
+  await g.trigger('game.start', { self: p0, player: p0 });
+  ok(p0.moulueMax === 10, `T56a 【穷谋】谋略值上限应为 10（实际 ${p0.moulueMax}）`);
+  const got = g.addMoulue(p0, 20);
+  ok(p0.moulue === 10 && got === 10, `T56b 谋略值应能累积到 10（实际 ${p0.moulue}，本次获得 ${got}）`);
+  // 复活：扣 1 点谋略值，回满血
+  p0.moulue = 3; p0.hp = 0;
+  await g.trigger('death.before', { self: p0, player: p0, reason: 'test' });
+  ok(p0.alive, 'T56c 【持恒】应复活该角色');
+  ok(p0.hp === p0.maxHp, `T56d 拥有【穷谋】时复活必须回满血（实际 ${p0.hp}/${p0.maxHp}）`);
+  ok(p0.moulue === 2, `T56e 复活应减少 1 点谋略值（实际 ${p0.moulue}）`);
+  // 没有【穷谋】时仍只回复到 1 点（对照）
+  const g2 = newGame(2);
+  const q = g2.players[0];
+  q.skills = [getSkill('chiheng')];
+  q.maxHp = 4; q.hp = 0; q.moulue = 2;
+  g2.responder = { askPlay: async () => ({ endPhase: true }), ask: async () => ({ yes: true }) };
+  await g2.trigger('death.before', { self: q, player: q, reason: 'test' });
+  ok(q.alive && q.hp === 1, `T56f 无【穷谋】时复活只回复 1 点（实际 ${q.hp}）`);
 }
 
 // ---------------- 汇总 ----------------

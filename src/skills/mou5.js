@@ -313,6 +313,9 @@ defineSkill({
         const picks = await g.chooseSomeCards(p, zonesOf(t), x, { prompt: `【破军】：扣置 ${t.name} 至多 ${x} 张牌` });
         if (!picks.length) return;
         pluckCards(t, picks, g);
+        // 记归属（heldFrom=施放者座次）：同一目标可能被多名【破军】扣置，
+        // 施放者失技/阵亡时只能回收自己扣的那批（SG035-r2 P1）
+        for (const c of picks) if (c) c.heldFrom = p.seat;
         t.flags.m5Kou = [...(t.flags.m5Kou || []), ...picks];
         await ctx.log(`【破军】：${p.name} 扣置 ${t.name} 的 ${picks.map(cardLabel).join('、')}（回合结束时归还）`);
       },

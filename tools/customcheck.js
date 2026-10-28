@@ -166,12 +166,15 @@ const hasLog = (g, kw) => g.logs.some(l => String(l.text || l).includes(kw));
 {
   const g = mk(['custom_pangtong', 'sunquan'], { yes: true });
   const p = g.players[0], t = g.players[1];
+  await g.trigger('game.start', { self: p, player: p });   // 【穷谋】在开局时挂上限
+  ok(p.moulueMax === 10, `【穷谋】谋略值上限应为 10（实际 ${p.moulueMax}）`);
   p.moulue = 2;
   p.hp = 0;
   const dd = { self: p, killer: t };
   await g.trigger('death.before', dd);
   ok(dd.canceled === true, '【持恒】应取消本次死亡');
-  ok(p.alive === true && p.hp === 1, `【持恒】应复活并回复至 1 点体力（hp=${p.hp}）`);
+  // 2026-10-28：极·庞统新增【穷谋】，复活改为回满血
+  ok(p.alive === true && p.hp === p.maxHp, `【持恒】+【穷谋】复活应回满血（hp=${p.hp}/${p.maxHp}）`);
   ok(p.moulue === 1, `【持恒】应消耗 1 点谋略值（剩余 ${p.moulue}）`);
   // 没有谋略值时不能复活
   const g2 = mk(['custom_pangtong', 'sunquan'], { yes: true });

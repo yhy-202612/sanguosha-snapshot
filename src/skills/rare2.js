@@ -1,7 +1,7 @@
 // 稀有·专属（pack = 'rare2'）技能实现；技能 id 前缀 `rx_`
 // 口径：按移动版/海外服「稀有专属」牌面原文实现；引擎不支持的小游戏等机制做等价降级并在 desc 注明
 import { defineSkill, getSkill, allSkills, effSkills } from '../engine/skill.js';
-import { CARD_META, cardLabel } from '../engine/cards.js';
+import { CARD_META, cardLabel, EQUIP_SUB } from '../engine/cards.js';
 import { pindian } from '../engine/pindian.js';
 
 let vseq = 0;
@@ -1396,16 +1396,19 @@ defineSkill({
         if (!dest) return;
         if (from.zone === 'equip') {
           await g.unequipCard(from.owner, from.card, { reason: 'rangjie' });
-          const sub = CARD_META[from.card.name]?.sub || 'weapon';
-          const dslot = { weapon: 'weapon', armor: 'armor', horsePlus: 'horsePlus', horseMinus: 'horseMinus', treasure: 'treasure' }[sub] || 'weapon';
+          // ★SG035-r2 P1：CARD_META.sub 是 'horse+' / 'horse-'，不是 'horsePlus' / 'horseMinus'；
+          //   原映射永远 fallback 到 weapon → 坐骑被塞进武器栏、目标原武器被误弃。
+          const sub = CARD_META[from.card.name]?.sub;
+          const dslot = (sub && EQUIP_SUB[sub]) || 'weapon';
           // 目标槽位原有装备先摘下（派 lose）再置入，最后派 change（SG034 P1）
+          let oldC = null;
           if (dest.equips[dslot]) {
-            const oldC = dest.equips[dslot];
+            oldC = dest.equips[dslot];
             await g.unequipCard(dest, oldC, { reason: 'rangjie' });
             g.pushDiscard(oldC);   // ★摘下的牌必须有着落，否则凭空丢失
           }
           dest.equips[dslot] = from.card;
-          await g.trigger('equip.change', { self: dest, slot: dslot, card: from.card, old: null });
+          await g.trigger('equip.change', { self: dest, slot: dslot, card: from.card, old: oldC });
         } else {
           from.owner.judgeZone = (from.owner.judgeZone || []).filter((z) => z.card !== from.card);
           dest.judgeZone = dest.judgeZone || [];

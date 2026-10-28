@@ -10,6 +10,7 @@ import { GENERALS, generalById, KINGDOM_CN, PACK_CN } from '../data/generals.js'
 import { deckEntries } from '../data/deck.js';
 import { getMode, modeList } from '../modes/index.js';
 import { AIPlayer } from '../ai/index.js';
+import { makeLLMBrain, llmStatus, llmEnabled, llmStats } from '../ai/llm.js';
 import { makeRng } from '../engine/rng.js';
 import '../skills/index.js';
 
@@ -179,6 +180,8 @@ function publicRoom(room) {
     customPool: room.customPool || null,
     maxSeats: room.maxSeats, status: room.status, round: room.round || 0,
     hostRole: room.hostRole || null,
+    aiBrain: room.aiBrain || 'builtin', aiModel: room.aiModel || 'deepseek', aiLevel: room.aiLevel || 'low',
+    aiReady: llmEnabled(),
     emptySince: room.emptySince ?? null,
     minPlayers: getMode(room.modeId).minPlayers,
     maxPlayers: getMode(room.modeId).maxPlayers,
@@ -241,6 +244,8 @@ function createRoom({
     dual: !!dual,
     hostRole: normHostRole(modeId, hostRole),
     maxSeats: maxSeats || mode.maxPlayers,
+    // AI 大脑：builtin=内置启发式；llm=大模型。level: low(仅出牌阶段) / high(出牌+关键响应)
+    aiBrain: 'builtin', aiModel: 'deepseek', aiLevel: 'low',
     seats: [], game: null, status: 'waiting', round: 0, result: null,
     emptySince: Date.now(),
     clients: new Map(), pending: new Map(), reqSeq: 0,
@@ -457,6 +462,32 @@ function askSeat(room, seatIndex, req) {
   });
 }
 
+// AI 大脑实例缓存：同一房间同一座位复用（避免每次决策重建 + 便于统计）
+// onThink：把大模型的决策过程广播给真人玩家 —— 玩家能看到「AI 正在思考 / 想了多久 / 选了什么」
+function brainOf(room, seatIndex) {
+  if (!llmEnabled()) return null;
+  room.__brains = room.__brains || new Map();
+  const key = `${seatIndex}:${room.aiModel}:${room.aiLevel}`;
+  if (!room.__brains.has(key)) {
+    const onThink = (ev) => {
+      broadcast(room, 'ai-think', ev);
+      if (ev.phase === 'dead') {
+        const nm = room.seats[ev.seat]?.name || `座 ${ev.seat + 1}`;
+        broadcast(room, 'log', { text: `⚠ ${nm} 的大模型连续 ${ev.count} 次未响应，本局已自动切回内置 AI` });
+      }
+    };
+    room.__brains.set(key, makeLLMBrain(seatIndex, { model: room.aiModel, level: room.aiLevel, onThink }));
+  }
+  return room.__brains.get(key);
+}
+
+// 座位可用的大模型大脑：未开启 / 密钥缺失 / 已熔断 → null（调用方回落内置 AI）
+function usableBrain(room, seatIndex) {
+  if (room.aiBrain !== 'llm') return null;
+  const b = brainOf(room, seatIndex);
+  return b && b.alive() ? b : null;
+}
+
 function makeResponder(room) {
   return {
     async askPlay(game, player) {
@@ -466,6 +497,8 @@ function makeResponder(room) {
         timeout: TURN_TIMEOUT,
       };
       if (!seat || seat.isAI) {
+        const brain = usableBrain(room, player.seat);
+        if (brain) return brain.askPlay(game, player);
         return new AIPlayer(player.seat).askPlay(game, player);
       }
       return askSeat(room, player.seat, req);
@@ -473,6 +506,8 @@ function makeResponder(room) {
     async ask(game, player, req) {
       const seat = room.seats[player.seat];
       if (!seat || seat.isAI) {
+        const brain = usableBrain(room, player.seat);
+        if (brain) return brain.ask(game, player, req);
         return new AIPlayer(player.seat).ask(game, player, req);
       }
       return askSeat(room, player.seat, req);
@@ -639,6 +674,9 @@ const server = http.createServer(async (req, res) => {
       persistNow(); // 重启前落盘一次，确保恢复的是最新房间
       return json(res, 200, { ok: true, clients: hit, rooms: rooms.size });
     }
+    if (p === '/api/llm-status') {
+      return json(res, 200, { providers: llmStatus(), enabled: llmEnabled(), stats: llmStats() });
+    }
     if (p === '/api/meta') {
       return json(res, 200, {
         modes: modeList(),
@@ -798,6 +836,13 @@ const server = http.createServer(async (req, res) => {
         }
         if (body.dual != null) room.dual = !!body.dual;
         if (body.hostRole !== undefined) room.hostRole = normHostRole(room.modeId, body.hostRole);
+        // AI 大脑设置（房主可调）：builtin/llm、deepseek/glm、low/high
+        if (['builtin', 'llm'].includes(body.aiBrain)) {
+          room.aiBrain = body.aiBrain === 'llm' && !llmEnabled() ? 'builtin' : body.aiBrain;
+        }
+        if (['deepseek', 'glm'].includes(body.aiModel)) room.aiModel = body.aiModel;
+        if (['low', 'high'].includes(body.aiLevel)) room.aiLevel = body.aiLevel;
+        if (room.__brains) room.__brains.clear();
         if (wantSeats != null) {
           if (wantSeats < room.seats.length) {
             room.seats = room.seats.slice(0, wantSeats);

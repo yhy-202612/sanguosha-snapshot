@@ -116,6 +116,7 @@ input:focus,.pick-select:focus,.pool-search:focus{border-color:var(--brand-gold)
   box-shadow:inset 0 0 10px rgba(216,180,106,.28),inset 0 1px 0 rgba(255,230,180,.25),0 0 0 1px rgba(216,180,106,.35);
 }
 .chip.on small,.chip.on i{color:rgba(241,215,154,.7)}
+.chip.dis{opacity:.4;cursor:not-allowed;pointer-events:none;text-decoration:line-through}
 
 /* 武将一览 */
 .generals{display:grid;grid-template-columns:repeat(auto-fill,minmax(156px,1fr));gap:var(--s2);max-height:46vh;overflow:auto;overscroll-behavior:contain;padding:2px 4px 2px 0}
@@ -183,6 +184,11 @@ input:focus,.pick-select:focus,.pool-search:focus{border-color:var(--brand-gold)
 .seatcard.ready{border-color:#3f7a4f;box-shadow:inset 0 0 0 1px rgba(67,178,119,.3),0 0 12px rgba(67,178,119,.15)}
 .seatcard.ready .rdy{color:var(--success)}
 .seatcard.off{opacity:.45}
+/* AI 大模型「思考中」：空则完全不占位，出现时轻微呼吸，让玩家知道是它正在想 */
+.seatcard .think{font-size:var(--fs-xs);margin-top:2px;color:var(--gold-2);letter-spacing:.02em}
+.seatcard .think:empty{display:none}
+.seatcard .think.on{animation:ai-think-breathe 1.6s ease-in-out infinite}
+@keyframes ai-think-breathe{0%,100%{opacity:.55}50%{opacity:1}}
 
 /* ---------- 对局桌面 ---------- */
 #table{position:relative;display:flex;flex-direction:column;flex-wrap:nowrap;gap:var(--s2);padding:var(--s3) var(--s4) var(--s2);min-height:0;overflow:hidden}
@@ -267,6 +273,13 @@ input:focus,.pick-select:focus,.pool-search:focus{border-color:var(--brand-gold)
 }
 #phaseInfo:empty,#discardInfo:empty{display:none}
 #phaseInfo b{color:var(--gold-2);font-weight:700;letter-spacing:1px}
+#aiThinkHint{
+  font-size:var(--fs-sm);color:var(--gold-2);padding:4px 14px;border-radius:var(--r-pill);text-align:center;
+  background:linear-gradient(180deg,rgba(40,32,20,.92),rgba(24,19,12,.92));border:1px solid var(--gold-3);
+  font-variant-numeric:tabular-nums;
+}
+#aiThinkHint:empty{display:none}
+#aiThinkHint.on{animation:ai-think-breathe 1.6s ease-in-out infinite}
 #discardInfo{display:flex;align-items:center;gap:var(--s2);font-size:var(--fs-sm);color:var(--muted);font-variant-numeric:tabular-nums}
 #discardInfo::before{content:"";width:12px;height:16px;border-radius:2px;background:linear-gradient(180deg,#e9e1cc,#bfb291);box-shadow:2px -2px 0 -1px #8a7c5a,var(--sh1);transform:rotate(-8deg)}
 

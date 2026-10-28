@@ -211,6 +211,16 @@ registerHeldContainer({
 施放者失技/阵亡时容器在目标身上、没人回收 → 牌永久滞留。这类容器必须声明 `crossPlayer: true`，
 引擎会遍历所有玩家回收（`jun`、`flags.m5Kou` 已如此登记）。
 
+★★`crossPlayer` 还必须提供 `fromSeat(card)`（SG035-r2 P1）：同一目标可能被**多名**施放者扣置
+（A、B 都【破军】过同一人），只写 `crossPlayer` 会导致「任何角色死亡/失技 → 全桌的军/寇一起进弃牌堆」。
+约定：扣置时给牌打标记 `c.heldFrom = 施放者.seat`，容器声明 `fromSeat: (c) => c?.heldFrom`，
+`clear(p, taken)` 里**只删 taken**（不要整体置空），这样别人的牌会留在目标身上。
+无 `heldFrom` 标记的牌按旧行为回收（宁可回收，避免滞留）。
+
+★「复活回复量」约定：复活类技能（【持恒】【涅槃】等）若允许某些技能把复活改成回满血，
+应在 `game.start` 里置 `p.flags.reviveToFull = true`（参考极·庞统【穷谋】），
+复活结算处读 `p.flags?.reviveToFull` 决定 `p.hp = p.maxHp` 还是 `1`。
+
 ★`owner` 语义：`removeSkills(p, [id])` 只回收「owner 命中该 id」的容器，避免删 A 误清 B。
 一个容器被**多个技能**写入时（如 `flags.kuangzuo` = `tongyin`/`chengfeng` 写、`kuangzuo` 消耗），
 `owner` 必须写成数组 `['tongyin','chengfeng','kuangzuo']`，否则删任一方都会漏清或误清。

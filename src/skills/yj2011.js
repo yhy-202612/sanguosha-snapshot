@@ -349,6 +349,8 @@ defineSkill({
           await ctx.game.unequipCard(t, c, { reason: 'pojun' });
         }
         t.jun = t.jun || [];
+        // 记归属（heldFrom=施放者座次）：回收时只退自己扣的牌（SG035-r2 P1）
+        for (const c of moved) if (c) c.heldFrom = ctx.self.seat;
         t.jun.push(...moved);
         await ctx.log(`${ctx.self.name} 发动【破军】：将 ${t.name} 的 ${moved.length} 张牌置于其武将牌上`);
       },

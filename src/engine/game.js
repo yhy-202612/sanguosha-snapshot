@@ -875,7 +875,17 @@ export class Game {
           if (spec.alwaysClear) { try { spec.clear(holder, [], []); } catch { /* ignore */ } }
           continue;
         }
-        const { cards, keep } = this._sweepHeldArr(arr);
+        // ★SG035-r2 P1：crossPlayer 容器里可能混着多个施放者的牌（A、B 都【破军】过同一目标）。
+        //   只回收属于本次被回收玩家（施放者）的那批 —— 否则任何角色死亡/失技都会把
+        //   全桌的「军」「寇」一起扫进弃牌堆。无 heldFrom 标记的按旧行为回收（宁可回收，避免滞留）。
+        const mineOf = (c) => {
+          if (!spec.crossPlayer || typeof spec.fromSeat !== 'function') return true;
+          const from = spec.fromSeat(c);
+          return from == null || from === player.seat;
+        };
+        const arrMine = spec.crossPlayer ? arr.filter(mineOf) : arr;
+        if (!arrMine.length) continue;   // 全是别人扣置的牌：一张都不动
+        const { cards, keep } = this._sweepHeldArr(arrMine);
         if (!cards.length) {
           // 「只清不返回」型容器（虚拟牌 / 合成牌，如 extraWeaponCard、guifu）也必须清空，
           // 否则失去技能后容器里的虚拟牌一直挂着（它不是真牌，不能入弃牌堆）

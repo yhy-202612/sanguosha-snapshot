@@ -12,7 +12,7 @@ const QIAO_ARMORS = ['bagua', 'tengjia'];            // 「巧」防具牌：八
 // 【谋渊】锁定技：当一张牌进入弃牌堆时，你获得 1 点谋略值（上限 5；有谋略值即视为拥有【妙计】）
 defineSkill({
   id: 'mouyuan', name: '谋渊',
-  desc: '锁定技，当一张牌进入弃牌堆时，你获得 1 点谋略值（上限 5；拥有谋略值时你视为拥有【妙计】）。',
+  desc: '锁定技，当一张牌进入弃牌堆时，你获得 1 点谋略值（上限默认 5，由其它技能决定；拥有谋略值时你视为拥有【妙计】）。',
   triggers: [{
     on: 'cards.discard', who: 'any', optional: false,
     filter: (d) => (d.cards || []).length > 0,
@@ -24,22 +24,40 @@ defineSkill({
   }],
 });
 
+// 【穷谋】锁定技：你的谋略值上限为 10；你复活时，将体力回复至上限
+// 与【持恒】配套：持恒把「死→活」这一步做出来，本技能把「上限 10」与「回满」两条静态修正挂上。
+defineSkill({
+  id: 'qiongmou', name: '穷谋',
+  desc: '锁定技，你的谋略值上限为 10；你复活时，将体力回复至上限。',
+  triggers: [{
+    on: 'game.start', who: 'self', optional: false,
+    async effect(ctx) {
+      const p = ctx.self;
+      p.moulueMax = Math.max(10, p.moulueMax || 5);
+      p.flags.reviveToFull = true;      // 【持恒】等复活结算读取此标记
+      await ctx.log(`【穷谋】：${p.name} 的谋略值上限为 ${p.moulueMax}，复活时回复至体力上限`);
+    },
+  }],
+});
+
 // 【持恒】持恒技：当你死亡时，可以减少 1 点谋略值，复活并回复至 1 点体力
 defineSkill({
   id: 'chiheng', name: '持恒',
-  desc: '持恒技，当你死亡时，你可以减少 1 点谋略值，然后复活并回复至 1 点体力。',
+  desc: '持恒技，当你死亡时，你可以减少 1 点谋略值，然后复活并回复至 1 点体力（拥有【穷谋】时回复至体力上限）。',
   triggers: [{
     on: 'death.before', who: 'self', optional: false,
     filter: (d) => d.self === d.player && (d.player.moulue || 0) >= 1,
     async effect(ctx) {
       const p = ctx.self, g = ctx.game;
-      const yes = await ctx.ask.confirm(p, `【持恒】：减少 1 点谋略值（当前 ${p.moulue}），复活并回复至 1 点体力？`);
+      const toFull = !!(p.flags?.reviveToFull || (p.skills || []).some(s => s && s.id === 'qiongmou'));
+      const hpText = toFull ? '体力上限' : '1 点体力';
+      const yes = await ctx.ask.confirm(p, `【持恒】：减少 1 点谋略值（当前 ${p.moulue}），复活并回复至${hpText}？`);
       if (!yes) return;
       if (!g.useMoulue(p, 1)) return;
       ctx.data.canceled = true;
       p.alive = true;
-      p.hp = 1;
-      await ctx.log(`【持恒】：减少 1 点谋略值（剩余 ${p.moulue}/${p.moulueMax}），复活并回复至 1 点体力`);
+      p.hp = toFull ? p.maxHp : 1;
+      await ctx.log(`【持恒】：减少 1 点谋略值（剩余 ${p.moulue}/${p.moulueMax}），复活并回复至${hpText}（${p.hp}/${p.maxHp}）`);
     },
   }],
 });

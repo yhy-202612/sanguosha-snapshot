@@ -6,7 +6,7 @@
 //   · 弩炮**不再常驻军争牌堆**，仅当场上有天工·诸葛亮时由【巧工】加入牌堆
 export const CUSTOM_GENERALS = [
   // 极·庞统：谋略值体系（谋渊 收谋略值、持恒 耗谋略值复活）
-  { id: 'custom_pangtong', name: '极·庞统', kingdom: 'shu', hp: 2, pack: 'custom', skills: ['mouyuan', 'chiheng'] },
+  { id: 'custom_pangtong', name: '极·庞统', kingdom: 'shu', hp: 2, pack: 'custom', skills: ['mouyuan', 'chiheng', 'qiongmou'] },
 
   // 神黄盖：护甲体系（护甲上限 10）+ 九条技能
   // 技能名为主控暂定（玩家原稿只编号），可随时改名

@@ -75,6 +75,8 @@ WorkingDirectory={REMOTE_DIR}
 Environment=PORT={PORT}
 Environment=HOST=172.19.0.1
 Environment=TURN_TIMEOUT=30000
+# 大模型密钥（真 AI 玩家）：只放服务器本地，chmod 600，不进部署包、不进 git
+EnvironmentFile=-/etc/sanguosha.env
 ExecStart=/usr/bin/node {REMOTE_DIR}/src/server/index.js
 Restart=always
 RestartSec=3

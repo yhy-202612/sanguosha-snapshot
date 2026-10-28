@@ -398,8 +398,12 @@ defineSkill({
       if (!t) return;
       const mine = Object.values(p.equips).filter(Boolean).length;
       const his = Object.values(t.equips).filter(Boolean).length;
-      const a = p.equips, b = t.equips;
-      p.equips = { ...b }; t.equips = { ...a };
+      // ★SG035-r2 P0：与【甘露】同一根因（第 4 处）——整区交换必须逐槽走 swapEquipSlot。
+      //   原实现直接 `p.equips = {...b}` 交换，零 equip.lose / 零 equip.change：
+      //   精械弩的「出杀数不限」标记残留、白银狮子不回复、护甲/攻击范围全不刷新。
+      for (const slot of ['weapon', 'armor', 'horsePlus', 'horseMinus', 'treasure']) {
+        await g.swapEquipSlot(p, t, slot, { reason: 'fengxiang' });
+      }
       const now = Object.values(p.equips).filter(Boolean).length;
       await g.log(`【封乡】：与 ${t.name} 交换装备区（${mine} ⇄ ${his}）`);
       if (now < mine) await ctx.draw(p, mine - now, { reason: 'fengxiang' });
