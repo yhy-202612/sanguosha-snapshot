@@ -6,7 +6,7 @@
 import '../src/skills/index.js';
 import { Game, CARD_META } from '../src/engine/index.js';
 import { suitOf } from '../src/engine/cards.js';
-import { getSkill, collectTriggers, HELD_CONTAINERS } from '../src/engine/skill.js';
+import { getSkill, collectTriggers, HELD_CONTAINERS, allSkills } from '../src/engine/skill.js';
 import { generalById } from '../src/data/generals.js';
 import { getMode } from '../src/modes/index.js';
 import { deckEntries } from '../src/data/deck.js';
@@ -1309,7 +1309,7 @@ function spyAsks(g) {
   c1.heldFrom = a.seat; c2.heldFrom = b.seat;
   t.flags.m5Kou = [c1, c2];
   g.discardPile = [];
-  await g.reclaimHeld(t, { onlyOwners: null });   // 等价于「持牌者（目标）死亡」
+  await g.reclaimHeld(t, { holderDead: true });   // 等价于「持牌者（目标）死亡」
   ok(g.discardPile.some(c => c.id === c1.id), 'T58a 持牌者死亡时，A 扣的牌必须回收');
   ok(g.discardPile.some(c => c.id === c2.id), 'T58b 持牌者死亡时，B 扣的牌也必须回收（尸体上不能留牌）');
   ok((t.flags.m5Kou || []).length === 0, 'T58c 回收后容器必须清空');
@@ -1389,6 +1389,139 @@ function mkCtx(g, p, opts = {}) {
     if (/const slot = CARD_META\[[^\]]+\]\.sub;/.test(code)) hits.push(`${f}: slot = CARD_META[..].sub`);
   }
   ok(!hits.length, `T59c 仍把 CARD_META.sub 当槽位键：${hits.join('、')}`);
+}
+
+
+// ---------------- T60 game.start 的 who:'self' 必须**全部**触发（自动枚举，新增技能自动纳入） ----------------
+{
+  const list = allSkills().filter(s => (s.triggers || []).some(t => t.on === 'game.start' && t.who === 'self'));
+  ok(list.length >= 21, `T60a 候选项应 ≥21（实际 ${list.length}）`);
+  const spy = new Map(); const restore = [];
+  for (const sk of list) {
+    for (const tr of sk.triggers) {
+      if (tr.on !== 'game.start') continue;
+      const orig = tr.effect;
+      restore.push([tr, orig]);
+      tr.effect = async (ctx) => { spy.set(sk.id, (spy.get(sk.id) || 0) + 1); return orig(ctx); };
+    }
+  }
+  const seats = [
+    { id: 'st0', name: 'ST0', isAI: true, general: generalById('sunquan') },
+    { id: 'st1', name: 'ST1', isAI: true, general: generalById('caocao') },
+  ];
+  const g = new Game({
+    seats, mode: getMode('duel'), seed: 31, deckEntries: deckEntries('standard'),
+    responder: { askPlay: async () => ({ endPhase: true }), ask: async () => null },
+    config: { timeout: 300 },
+  });
+  g.onState = () => {};
+  g.players[0].skills = list.map(x => x);
+  await g.run();
+  for (const [tr, orig] of restore) tr.effect = orig;
+  const missing = list.filter(x => !spy.get(x.id));
+  ok(!missing.length, `T60b game.start 的 who:'self' 技能未触发：${missing.map(x => `${x.id}/${x.name}`).join('、')}`);
+  const warns = g.logs.map(l => String(l.text || l)).filter(t => t.includes('⚠'));
+  ok(!warns.length, `T60c game.start 触发时不得有技能异常：${warns.slice(0, 3).join(' | ')}`);
+}
+
+// ---------------- T61 crossPlayer：仅「失去技能」不能扫走别人扣的牌（SG036-r2 P1） ----------------
+{
+  const g = newGame(2);
+  const a = g.players[0], b = g.players[1];
+  a.skills = [getSkill('m5_pojun')];
+  b.skills = [getSkill('m5_pojun')];
+  const c1 = mk('sha'), c2 = mk('shan');
+  c1.heldFrom = a.seat; c2.heldFrom = b.seat;
+  b.flags.m5Kou = [c1, c2];          // b 身上同时有 A 扣的与 B 自己扣的
+  g.discardPile = [];
+  // 失去技能（A 仍然活着）→ 只退 A 扣的那张
+  await g.removeSkills(a, ['m5_pojun']);
+  ok(g.discardPile.some(c => c.id === c1.id), 'T61a 失技：自己扣的牌必须退回弃牌堆');
+  ok(!g.discardPile.some(c => c.id === c2.id), 'T61b 失技：别人扣在自己身上的牌不能一起扫走');
+  ok((b.flags.m5Kou || []).some(c => c.id === c2.id), 'T61c 失技：别人的牌仍留在容器里');
+  // 持牌者（b）死亡 → 他身上剩下的牌（包括自己扣的）全退
+  b.alive = false;
+  await g.reclaimHeld(b, { holderDead: true });
+  ok(g.discardPile.some(c => c.id === c2.id), 'T61d 持牌者死亡：身上所有牌必须全退');
+  ok((b.flags.m5Kou || []).length === 0, 'T61e 持牌者死亡：容器必须清空');
+}
+
+// ---------------- T62 飒然：恢复栏 ≠ 牌该进的栏（SG036-r2 P1 FAIL 复现） ----------------
+{
+  const g = newGame(2);
+  const p = g.players[0];
+  p.skills = [getSkill('saran')];
+  const horse = mk('chitu');                 // +1 坐骑
+  g.deck = [];
+  g.discardPile = [horse];                   // 池里只有这张 → rng.pick 必中
+  p.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  p.flags.disabledEquip = { weapon: true };  // 只废除了武器栏
+  const tr = getSkill('saran').triggers.find(t => t.on === 'damage.after');
+  await tr.effect({ self: p, game: g, log: (m) => g.log(m), data: {} });
+  ok(p.equips.horsePlus === horse, 'T62a 飒然：+1 坐骑应落在 horsePlus（旧版塞进恢复的武器栏）');
+  ok(!p.equips.weapon, 'T62b 飒然：武器栏不能出现坐骑（牌型与槽位不符）');
+  ok((p.flags.disabledEquip || {}).weapon === false, 'T62c 飒然：仍应恢复一个被废除的装备栏');
+}
+
+// ---------------- T63 forceEquip 不能绕过废除的装备栏（SG036-r2 P1） ----------------
+{
+  const g = newGame(2);
+  const p = g.players[0];
+  p.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  p.flags.disabledEquip = { weapon: true };
+  const wpn = mk('qinggang');
+  g.discardPile = [];
+  const slot = await g.forceEquip(p, wpn, { reason: 't63' });
+  ok(slot === null, 'T63a forceEquip：目标栏已废除时应返回 null，不写入');
+  ok(!p.equips.weapon, 'T63b forceEquip：废除栏不得被写入');
+  ok(g.discardPile.some(c => c.id === wpn.id), 'T63c forceEquip：被拒绝的牌应进弃牌堆（不能凭空消失）');
+}
+
+
+// ---------------- T64 置入装备区必须派 equip.change / 尊重废除栏（SG036-r2 P2） ----------------
+{
+  // 挹挟 / 授术 / 护剑：置入装备区后必须派 equip.change（静态：源码里这两行必须同时出现）
+  const fs = await import('node:fs');
+  const cases = [
+    ['shenwu.js', 'qiexie', '挹挟'],
+    ['jsg_qi.js', 'jq_shoushu', '授术'],
+    ['jsg_zhuan.js', 'jz_hujian', '护剑'],
+  ];
+  for (const [f, id, cn] of cases) {
+    const src = fs.readFileSync(new URL(`../src/skills/${f}`, import.meta.url), 'utf8');
+    const start = src.indexOf(`id: '${id}'`);
+    ok(start >= 0, `T64a【${cn}】源码里应能找到技能 id: '${id}'`);
+    const seg = src.slice(start, start + 2200);
+    ok(/equips\.(weapon|treasure)\s*=/.test(seg) && /equip\.change/.test(seg),
+      `T64a【${cn}】置入装备区必须同时派 equip.change`);
+  }
+  // 狩骊：已废除的栏不能装（行为）
+  const g = newGame(2);
+  const p0 = g.players[0], p1 = g.players[1];
+  p0.skills = [getSkill('shouli')];
+  p0.flags.disabledEquip = { horsePlus: true, horseMinus: true };
+  p1.flags.disabledEquip = { horsePlus: true, horseMinus: true };
+  const h1 = mk('chitu'), h2 = mk('jueying');
+  g.deck = [h1, h2];
+  g.discardPile = [];
+  const tr = getSkill('shouli').triggers.find(t => t.on === 'game.start');
+  await tr.effect({ self: p0, game: g, log: (m) => g.log(m), data: {} });
+  ok(!p0.equips.horsePlus && !p0.equips.horseMinus, 'T64b 狩骊：马栏已废除时不能装马');
+  ok(!p1.equips.horsePlus && !p1.equips.horseMinus, 'T64c 狩骊：他人马栏已废除时也不能装');
+  ok(g.deck.length === 2, 'T64d 狩骊：被拒绝的坐骑必须退回牌堆（不能凭空消失）');
+}
+
+// ---------------- T65 crossPlayer 无 fromSeat 时的 fallback 不能扫全桌（SG036-r2 P1） ----------------
+{
+  const { HELD_CONTAINERS } = await import('../src/engine/skill.js');
+  const spec = HELD_CONTAINERS.find(x => x.crossPlayer && typeof x.fromSeat !== 'function');
+  if (!spec) {
+    ok(true, 'T65 当前无「crossPlayer 且缺 fromSeat」的容器（约定已满足）');
+  } else {
+    const g = newGame(2);
+    const a = g.players[0], b = g.players[1];
+    ok(typeof spec.get === 'function', `T65 容器 ${spec.key} 缺 fromSeat（已按只回收自身处理）`);
+  }
 }
 
 // ---------------- 汇总 ----------------

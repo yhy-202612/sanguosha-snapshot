@@ -809,7 +809,7 @@ export class Game {
 
   // onlyOwners：只回收这些技能 id 名下的容器（removeSkills 用）。
   // 传 null = 全量回收（死亡 / 失去全部技能 / disableSkills）。
-  async reclaimHeld(player, { onlyOwners = null } = {}) {
+  async reclaimHeld(player, { onlyOwners = null, holderDead = false } = {}) {
     if (!player) return 0;
     const owners = onlyOwners ? new Set([].concat(onlyOwners)) : null;
     const owned = (id) => !owners || owners.has(id);
@@ -880,10 +880,14 @@ export class Game {
         //   ② holder 是别人 → 只退「自己扣的」那批（否则无关角色死亡/失技会把全桌的牌一起扫进弃牌堆）。
         //   无 heldFrom 标记的按旧行为回收（宁可回收，避免滞留）。
         const mineOf = (c) => {
-          if (!spec.crossPlayer || typeof spec.fromSeat !== 'function') return true;
+          // ★SG036-r2 P1：crossPlayer 但**没声明 fromSeat** 的容器无法判断归属 → 只回收自己身上的，
+          //   不能「任何角色失技就扫全桌」（宁可漏收，漏收会被 heldleak 门禁抓出来，扫全桌是静默丢牌）。
+          if (spec.crossPlayer && typeof spec.fromSeat !== 'function') return holder === player;
+          if (!spec.crossPlayer) return true;
           const from = spec.fromSeat(c);
           if (from == null) return true;
-          return holder === player || from === player.seat;
+          //    ★holderDead 才代表「持牌者本人已死」；仅仅失去技能时不能把别人扣在他身上的牌扫走（SG036-r2 P1）
+          return (holder === player && holderDead) || from === player.seat;
         };
         const arrMine = spec.crossPlayer ? arr.filter(mineOf) : arr;
         if (!arrMine.length) continue;   // 全是别人扣置、且持牌者还活着：一张都不动
@@ -969,7 +973,7 @@ export class Game {
     this.pushDiscard(all);
     // ★技能私有容器里的牌也必须回收（SG028）：bifaStack 之类「扣置在武将牌旁」的牌不在任何标准区域，
     //   die() 原先只清 hand/equips/judgeZone/buqu → 目标先死时那些牌永久滞留（实测 bifaStack 仍为 1、牌不在弃牌堆）。
-    await this.reclaimHeld(player);
+    await this.reclaimHeld(player, { holderDead: true });
     await this.trigger('death.after', { self: player, killer: from });
     await this.mode.onDeath?.(this, player, from);
     this.checkVictory();
@@ -1382,10 +1386,18 @@ export class Game {
 
   // 一次性把某张牌装到玩家身上（用于「凭空换上某装备」类技能）——
   // 等价于「摘下旧装备（派 lose）→ 置入新装备（派 change）」，避免各处手写漏派（SG034 P0：冠武）
-  async forceEquip(player, card, { reason = 'force' } = {}) {
+  async forceEquip(player, card, { reason = 'force', ignoreDisabled = false } = {}) {
     const sub = CARD_META[card.name]?.sub;
     const slot = sub ? EQUIP_SUB[sub] : null;
     if (!slot || !player) return null;
+    // ★SG036-r2 P1：被废除的装备栏（陆抗【决堰】/ 张绣【雄乱】等）不能靠 forceEquip 绕过去
+    //   （援护/直谏/骄纵/飒然都会把牌塞进去）。与 equipCard 同口径：直接进弃牌堆。
+    if (!ignoreDisabled && (player.flags.disabledEquip || {})[slot]) {
+      if (!this.discardPile.includes(card)) this.discardPile.push(card);
+      const cn = { weapon: '武器', armor: '防具', horsePlus: '+1 坐骑', horseMinus: '-1 坐骑', treasure: '宝物' }[slot] || '该';
+      await this.log(`${player.name} 的${cn}装备栏已废除，${cardLabel(card)} 直接置入弃牌堆`);
+      return null;
+    }
     const old = player.equips[slot] || null;
     if (old === card) return slot;
     if (old) {
@@ -1806,7 +1818,11 @@ export class Game {
       if (trigger.once === 'turn' && player.flags[`used_${skill.id}`] === this.turnCount) continue;
       // 同步钩子同样必须先走 filter（此前遗漏：写在 filter 里的判断会被无条件执行）
       try {
-        if (trigger.filter && !trigger.filter({ ...data, self: data.self, player, game: this })) continue;
+        // ★SG036-r2：`game.start` 没有单一主体（派发时 self=null），但很多技能把它写成
+        //   `filter: (d) => d.self === d.player`。只把 who:'self' 判对还不够，filter 里的 d.self
+        //   也必须补成「拥有该技能的角色自己」，否则这 8 个技能（连谋/宏策/隽谋/鹍浴/狩骊/尽瘁…）仍被挡。
+        const fself = (data.self == null && event === 'game.start') ? player : data.self;
+        if (trigger.filter && !trigger.filter({ ...data, self: fself, player, game: this })) continue;
       } catch { continue; }
       try {
         const ctx = this.makeCtx(player, skill, trigger, data);
@@ -1863,7 +1879,9 @@ export class Game {
       // once:'turn' = 每个自己的回合最多一次（标记按回合号判定；旧实现只写标记、从不读取）
       if (trigger.once === 'turn' && player.flags[`used_${skill.id}`] === this.turnCount) continue;
       try {
-        if (trigger.filter && !trigger.filter({ ...data, self: data.self, player, game: this })) continue;
+        // ★SG036-r2：同 triggerSync —— game.start 下 filter 的 d.self 要补成角色自己
+        const fself = (data.self == null && event === 'game.start') ? player : data.self;
+        if (trigger.filter && !trigger.filter({ ...data, self: fself, player, game: this })) continue;
       } catch { continue; }
       const ctx = this.makeCtx(player, skill, trigger, data);
       if (trigger.optional) {

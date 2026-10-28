@@ -607,9 +607,12 @@ defineSkill({
         if (i < 0) break;
         const [c] = g.deck.splice(i, 1);
         const sub = CARD_META[c.name].sub;
-        if (sub === 'horse+') q.equips.horsePlus = c; else q.equips.horseMinus = c;
+        const slot = sub === 'horse+' ? 'horsePlus' : 'horseMinus';
+        // ★SG036-r2 P2：已废除的栏不能装（【决堰】/【雄乱】），牌退回牌堆顶
+        if ((q.flags.disabledEquip || {})[slot]) { g.deck.push(c); continue; }
+        q.equips[slot] = c;
         n++;
-        await g.trigger('equip.change', { self: q, card: c });
+        await g.trigger('equip.change', { self: q, slot, card: c, old: null });
       }
       await ctx.log(`【狩骊】：从下家开始，${n} 名角色随机使用了坐骑`);
     },
@@ -672,8 +675,14 @@ defineSkill({
         id: `qx_${g.turnCount}_${hit.name}`, name: 'qinglong', cn: hit.name,
         suit: 'none', num: 0, range: hit.hp, virtual: true, skillWeapon: true,
       };
-      if (!p.equips.weapon) p.equips.weapon = card;
-      else p.flags.extraWeaponCard = card;
+      if (!p.equips.weapon) {
+        p.equips.weapon = card;
+        // ★SG036-r2 P2：置入装备区必须派 equip.change（否则依赖该事件的技能/前端不会感知）
+        await g.trigger('equip.change', { self: p, slot: 'weapon', card, old: null });
+      } else {
+        p.flags.extraWeaponCard = card;
+        await g.trigger('equip.change', { self: p, slot: 'weapon', card, old: null });
+      }
       await ctx.log(`【挹挟】：将 ${hit.name} 当武器置于装备区（攻击范围 ${hit.hp}）`);
     },
   }],

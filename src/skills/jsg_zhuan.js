@@ -1147,6 +1147,8 @@ defineSkill({
         const w = vcard('qinggang', 'spade', 6);
         p.flags.jzChixue = w;
         p.equips.weapon = w;
+        // ★SG036-r2 P2：置入装备区必须派 equip.change
+        await ctx.game.trigger('equip.change', { self: p, slot: 'weapon', card: w, old: null });
         await ctx.log('【护剑】：获得【赤血青锋】（以【青釭剑】替代）并装备');
       },
     },

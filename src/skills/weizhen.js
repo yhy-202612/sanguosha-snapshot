@@ -1,7 +1,7 @@
 // 威震天下·武庙（weizhen）：威震天下 6 将 + 武庙 4 将
 // 资料：三国杀官网 x.sanguosha.com / biligame wiki / 百度百科 / 萌娘百科
 import { defineSkill, getSkill, effSkills } from '../engine/skill.js';
-import { CARD_META, cardLabel, isRed } from '../engine/cards.js';
+import { CARD_META, cardLabel, isRed , EQUIP_SUB } from '../engine/cards.js';
 import { pindian } from '../engine/pindian.js';
 
 let vseq = 0;
@@ -41,10 +41,11 @@ async function disableAnySlot(ctx, p, prefer = null) {
   return slot;
 }
 
-function restoreSlot(p) {
+// 恢复一个被废除的装备栏；prefer 指定时优先恢复该栏（★SG036-r2：抽到的牌可能与「随便恢复的那个栏」牌型不符）
+function restoreSlot(p, prefer = null) {
   const dis = SLOTS.filter(k => (p.flags.disabledEquip || {})[k]);
   if (!dis.length) return null;
-  const slot = dis[0];
+  const slot = (prefer && dis.includes(prefer)) ? prefer : dis[0];
   p.flags.disabledEquip = { ...(p.flags.disabledEquip || {}), [slot]: false };
   return slot;
 }
@@ -347,17 +348,17 @@ defineSkill({
         if (di >= 0) g.deck.splice(di, 1);
         const pi = g.discardPile.indexOf(c);
         if (pi >= 0) g.discardPile.splice(pi, 1);
-        // ★SG036 P1：原实现「随便找一个空槽」，会把坐骑塞进武器栏（牌型与槽位不符）。
-        //   改为走 forceEquip：按 CARD_META.sub 定槽位，旧装备派 lose + 进弃牌堆 + 派 change。
-        const restored = restoreSlot(p);
-        const slot = restored || SLOTS.find(k => !p.equips[k] && !(p.flags.disabledEquip || {})[k]);
-        if (!slot) { if (!g.discardPile.includes(c)) g.discardPile.push(c); return; }
-        if (restored) {
-          p.equips[slot] = c;
-          await g.trigger('equip.change', { self: p, card: c, slot });
-        } else {
-          await g.forceEquip(p, c, { reason: 'saran' });
+        // ★SG036-r2：原实现把牌写进「随便恢复的那个栏」（+1 马进武器栏）。
+        //   正确语义：①恢复栏优先恢复「这张牌该进的栏」；②牌一律按牌型入栏（走 forceEquip）；
+        //   ③该栏仍被废除（没恢复到它）→ 牌直接进弃牌堆。
+        const want = EQUIP_SUB[CARD_META[c.name]?.sub] || null;
+        const restored = restoreSlot(p, want);
+        if (!want || (p.flags.disabledEquip || {})[want]) {
+          if (!g.discardPile.includes(c)) g.discardPile.push(c);
+          await ctx.log(`【飒然】：${cardLabel(c)} 无可用装备栏，置入弃牌堆`);
+          return;
         }
+        await g.forceEquip(p, c, { reason: 'saran' });
         await ctx.log(`【飒然】：从${di >= 0 ? '牌堆' : '弃牌堆'}使用 ${cardLabel(c)}${restored ? `（恢复${SLOT_CN[restored]}）` : ''}`);
       },
     },

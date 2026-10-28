@@ -509,14 +509,14 @@ async function jiaozongMove(ctx) {
   // ★SG036 P1：按牌的牌型定槽位（原来「随便找空槽」会把坐骑塞进武器栏）
   const want = EQUIP_SUB[CARD_META[pick.c.name]?.sub];
   const free = !!want && !(t.flags.disabledEquip || {})[want];
-  if (!free) { await ctx.log(`【骄纵】：${t.name} 没有可用的装备栏`); return; }
+  if (!free) { await ctx.log(`【骄纵】：${t.name} 没有可用的装备栏`); return; }  // free 是布尔；槽名用 want
   await g.unequipCard(pick.q, pick.c, { reason: 'jiaozong' });
   await g.forceEquip(t, pick.c, { reason: 'jiaozong' });
   const color = isRed(pick.c) ? 'red' : 'black';
   t.flags.jiaozongColor = color;
   t.flags.jiaozongTurn = g.turnCount;
   t.flags.jiaozongDmgTurn = g.turnCount;
-  await ctx.log(`【骄纵】：将 ${cardLabel(pick.c)} 移入 ${t.name} 的${SLOT_CN[free]}，其本回合不能使用${color === 'red' ? '红色' : '黑色'}牌且受到伤害 +1`);
+  await ctx.log(`【骄纵】：将 ${cardLabel(pick.c)} 移入 ${t.name} 的${SLOT_CN[want] || want}，其本回合不能使用${color === 'red' ? '红色' : '黑色'}牌且受到伤害 +1`);  // ★SG036-r2：SLOT_CN[free] 会把 boolean 当槽名（输出 undefined）
 }
 
 // ==================== 嗔孙尚香 · 妇随（限定技）/ 比翼 ====================

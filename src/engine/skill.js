@@ -165,6 +165,8 @@ export function collectTriggers(game, event, data) {
         //   因此只在 game.start 上把「self」理解为「拥有该技能的角色自己」。
         const selfOf = event === 'game.start' ? p : data.self;
         if (tr.who === 'self' && selfOf !== p) continue;
+        // ★SG036-r2：who:'other' 此前根本没有闸门（任何角色触发都算）。生产 0 使用，但补上防将来踩坑。
+        if (tr.who === 'other' && event !== 'game.start' && data.self === p) continue;
         if (tr.who === 'any' || tr.who === undefined) {
           // 由 filter 决定
         }

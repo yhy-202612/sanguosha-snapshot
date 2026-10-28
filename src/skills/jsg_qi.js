@@ -1070,6 +1070,8 @@ defineSkill({
         if (!t) return;
         const card = vcard('taiping', 'spade', 1);
         t.equips.treasure = card;
+        // ★SG036-r2 P2：置入装备区必须派 equip.change
+        await g.trigger('equip.change', { self: t, slot: 'treasure', card, old: null });
         await ctx.log(`【授术】：${t.name} 获得【太平要术】（宝物）`);
       },
     },
