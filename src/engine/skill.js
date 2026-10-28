@@ -158,7 +158,13 @@ export function collectTriggers(game, event, data) {
         //    —— 混合技（desc 非锁定 + 有 optional:false 触发器）只会跑锁定触发器，与非锁定语义分离
         if (p.flags?.noSkills && !tr.cleanup
           && !isLockedSkill(sk) && !isLockedTrigger(tr)) continue;
-        if (tr.who === 'self' && data.self !== p) continue;
+        // ★SG036 P0：`game.start` 是「每名角色各一次」的事件，派发时没有单一主体
+        //   （game.js 传的是 `{ self: null }`）。若照旧用 data.self 判 who:'self'，
+        //   全库 21 个 `on:'game.start', who:'self'` 的技能永远不会触发
+        //   （【铁壁】护甲上限、极·庞统【穷谋】谋略上限 10 都是死的）。
+        //   因此只在 game.start 上把「self」理解为「拥有该技能的角色自己」。
+        const selfOf = event === 'game.start' ? p : data.self;
+        if (tr.who === 'self' && selfOf !== p) continue;
         if (tr.who === 'any' || tr.who === undefined) {
           // 由 filter 决定
         }

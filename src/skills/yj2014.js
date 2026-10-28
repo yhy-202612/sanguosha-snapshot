@@ -1,6 +1,6 @@
 // 一将成名 2014（10 将 / 16 技能）
 import { defineSkill } from '../engine/skill.js';
-import { CARD_META, cardLabel, suitOf, isRedFor } from '../engine/cards.js';
+import { CARD_META, cardLabel, suitOf, isRedFor, EQUIP_SUB } from '../engine/cards.js';
 
 async function pickHand(ctx, player, test, prompt) {
   const cands = player.hand.filter(test);
@@ -136,12 +136,11 @@ defineSkill({
       const ts = await ctx.ask.targets(p, { min: 1, max: 1, candidates: g.alive(), prompt: '【援护】：置入谁的装备区' });
       if (!ts.length) return;
       const t = ts[0];
-      const slot = CARD_META[c.name].sub;
+      // ★SG036 P1：原实现 `const slot = CARD_META[c.name].sub` —— sub 是 'horse+' / 'horse-'，
+      //   而 equips 的键是 horsePlus/horseMinus，坐骑会被写进一个不存在的槽（牌等于丢失）。
+      //   统一走 forceEquip：按牌型定槽、旧装备 unequipCard(派 equip.lose)+进弃牌堆、再派 equip.change。
       p.hand = p.hand.filter(x => x !== c);
-      const old = t.equips[slot];
-      if (old) await ctx.discard(t, [old], { reason: 'yuanhu' });
-      t.equips[slot] = c;
-      await g.trigger('equip.change', { self: t, slot, card: c, old: old || null });
+      await g.forceEquip(t, c, { reason: 'yuanhu' });
       await ctx.draw(t, 1, { reason: 'yuanhu' });
       await ctx.log(`${p.name} 发动【援护】：将 ${cardLabel(c)} 置入 ${t.name} 的装备区，其摸一张牌`);
     },

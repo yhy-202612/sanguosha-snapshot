@@ -347,11 +347,17 @@ defineSkill({
         if (di >= 0) g.deck.splice(di, 1);
         const pi = g.discardPile.indexOf(c);
         if (pi >= 0) g.discardPile.splice(pi, 1);
+        // ★SG036 P1：原实现「随便找一个空槽」，会把坐骑塞进武器栏（牌型与槽位不符）。
+        //   改为走 forceEquip：按 CARD_META.sub 定槽位，旧装备派 lose + 进弃牌堆 + 派 change。
         const restored = restoreSlot(p);
         const slot = restored || SLOTS.find(k => !p.equips[k] && !(p.flags.disabledEquip || {})[k]);
         if (!slot) { if (!g.discardPile.includes(c)) g.discardPile.push(c); return; }
-        p.equips[slot] = c;
-        await g.trigger('equip.change', { self: p, card: c, slot });
+        if (restored) {
+          p.equips[slot] = c;
+          await g.trigger('equip.change', { self: p, card: c, slot });
+        } else {
+          await g.forceEquip(p, c, { reason: 'saran' });
+        }
         await ctx.log(`【飒然】：从${di >= 0 ? '牌堆' : '弃牌堆'}使用 ${cardLabel(c)}${restored ? `（恢复${SLOT_CN[restored]}）` : ''}`);
       },
     },

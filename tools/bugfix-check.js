@@ -1265,6 +1265,132 @@ function spyAsks(g) {
   ok(q.alive && q.hp === 1, `T56f 无【穷谋】时复活只回复 1 点（实际 ${q.hp}）`);
 }
 
+
+// ---------------- T57 game.start 必须在真实 run() 里触发 who:'self'（SG036 P0） ----------------
+// dsh 指出：game.js 派发 `trigger('game.start', { self: null })`，而 who:'self' 判的是 data.self，
+// 于是全库 21 个 `on:'game.start', who:'self'` 技能（【铁壁】护甲上限、【穷谋】谋略上限）从未生效。
+// 这里特地在真跑一局（不手动传 self）之后断言，避免再次「手动传 self 就过」的假绿。
+{
+  const seats = [
+    { id: 'gs0', name: 'GS0', isAI: true, general: generalById('custom_pangtong') },
+    { id: 'gs1', name: 'GS1', isAI: true, general: generalById('sunquan') },
+  ];
+  const g = new Game({
+    seats, mode: getMode('duel'), seed: 31, deckEntries: deckEntries('standard'),
+    responder: { askPlay: async () => ({ endPhase: true }), ask: async () => null },
+    config: { timeout: 300 },
+  });
+  g.onState = () => {};
+  await g.run();
+  ok(g.players[0].moulueMax === 10,
+    `T57a 真跑一局后【穷谋】应已把谋略上限置为 10（实际 ${g.players[0].moulueMax}）`);
+  const hg = [
+    { id: 'gs2', name: 'GS2', isAI: true, general: generalById('custom_huanggai') },
+    { id: 'gs3', name: 'GS3', isAI: true, general: generalById('caocao') },
+  ];
+  const g2 = new Game({
+    seats: hg, mode: getMode('duel'), seed: 7, deckEntries: deckEntries('standard'),
+    responder: { askPlay: async () => ({ endPhase: true }), ask: async () => null },
+    config: { timeout: 300 },
+  });
+  g2.onState = () => {};
+  await g2.run();
+  ok(g2.players[0].armorMax === 10,
+    `T57b 真跑一局后【铁壁】应已把护甲上限置为 10（实际 ${g2.players[0].armorMax}）`);
+}
+
+// ---------------- T58 持牌者死亡：身上的「寇」必须全部回收（SG036 P0） ----------------
+{
+  const g = newGame(3);
+  const a = g.players[0], b = g.players[1], t = g.players[2];
+  a.skills = [getSkill('m5_pojun')];
+  b.skills = [getSkill('m5_pojun')];
+  const c1 = mk('sha'), c2 = mk('shan');
+  c1.heldFrom = a.seat; c2.heldFrom = b.seat;
+  t.flags.m5Kou = [c1, c2];
+  g.discardPile = [];
+  await g.reclaimHeld(t, { onlyOwners: null });   // 等价于「持牌者（目标）死亡」
+  ok(g.discardPile.some(c => c.id === c1.id), 'T58a 持牌者死亡时，A 扣的牌必须回收');
+  ok(g.discardPile.some(c => c.id === c2.id), 'T58b 持牌者死亡时，B 扣的牌也必须回收（尸体上不能留牌）');
+  ok((t.flags.m5Kou || []).length === 0, 'T58c 回收后容器必须清空');
+}
+
+
+// ---------------- T59 置入装备区必须按牌型定槽位（SG036 P1：援护/直谏/飒然/骄纵） ----------------
+// 直接调 effect 并手工构造 ctx（不走 trigger，避免引擎把异常吞成「⚠ 技能异常」而假绿）
+function mkCtx(g, p, opts = {}) {
+  const ctx = {
+    self: p, game: g,
+    log: (m) => g.log(m),
+    draw: (x, n, o) => g.drawCards(x, n, o),
+    discard: (x, cs, o) => g.discardCards(x, cs, o),
+    damage: (o) => g.damage(o),
+    gain: (x, cs, o) => g.gainCards(x, cs, o),
+    ask: async () => null,
+  };
+  ctx.ask = async (pl, kind, req) => {
+    if (kind === 'targets') return { seats: (opts.targets || []).map(t => t.seat) };
+    if (kind === 'card' || kind === 'cards') return { cards: opts.cards || [] };
+    if (kind === 'confirm') return { yes: true };
+    return null;
+  };
+  ctx.ask.targets = async (pl, req) => (opts.targets || []);
+  ctx.ask.cards = async (pl, req) => (opts.cards || []);
+  ctx.ask.confirm = async () => true;
+  // 部分技能用 ctx.game.ask(player,'card',{cards:[id...]}) 取选择（pickHand 范式）
+  g.ask = async (pl, kind, req) => {
+    if (kind === 'card') return { cardId: (opts.cards && opts.cards[0] && opts.cards[0].id) || null };
+    if (kind === 'cards') return { cards: opts.cards || [] };
+    if (kind === 'targets') return { seats: (opts.targets || []).map(t => t.seat) };
+    return null;
+  };
+  return ctx;
+}
+{
+  // T59a【援护】：+1 坐骑置入他人装备区 → 必须落在 horsePlus，原武器不受影响
+  const g = newGame(2);
+  const a = g.players[0], b = g.players[1];
+  const sk = getSkill('yuanhu');
+  const horse = mk('chitu');              // +1 坐骑（sub === 'horse+'）
+  const wpn = mk('qinggang');
+  a.hand = [horse];
+  b.equips = { weapon: wpn, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  g.discardPile = [];
+  try {
+    await sk.triggers[0].effect(mkCtx(g, a, { cards: [horse], targets: [b] }));
+  } catch (e) { ok(false, `T59a 援护执行异常：${e.message}`); }
+  ok(b.equips.horsePlus === horse, 'T59a 援护：+1 坐骑应落在 horsePlus 槽（旧版写进不存在的 sub 键 → 牌丢失）');
+  ok(b.equips.weapon === wpn && g.discardPile.every(c => c.id !== wpn.id), 'T59a 援护：原武器应原样保留、不被误弃');
+  ok(a.hand.every(c => c.id !== horse.id), 'T59a 援护：牌应离开施放者手牌');
+}
+{
+  // T59b【直谏】：-1 坐骑 → horseMinus
+  const g = newGame(2);
+  const a = g.players[0], b = g.players[1];
+  const sk = getSkill('zhijian');
+  const mom = mk('jueying');              // -1 坐骑（sub === 'horse-'）
+  a.hand = [mom];
+  b.equips = { weapon: null, armor: null, horsePlus: null, horseMinus: null, treasure: null };
+  g.discardPile = [];
+  try {
+    await sk.active.effect(mkCtx(g, a, { cards: [mom], targets: [b] }));
+  } catch (e) { ok(false, `T59b 直谏执行异常：${e.message}`); }
+  ok(b.equips.horseMinus === mom, 'T59b 直谏：-1 坐骑应落在 horseMinus 槽');
+  ok(a.hand.every(c => c.id !== mom.id), 'T59b 直谏：牌应离开施放者手牌');
+}
+{
+  // T59c 静态：这 4 个文件都不得再把 CARD_META.*.sub 当槽位键
+  const fs = await import('node:fs');
+  const hits = [];
+  for (const f of ['yj2014.js', 'shan.js', 'weizhen.js', 'narrative.js']) {
+    const src = fs.readFileSync(new URL(`../src/skills/${f}`, import.meta.url), 'utf8');
+    const code = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    if (/equips\[\s*[a-z]\w*\.sub\s*\]/.test(code)) hits.push(`${f}: equips[xxx.sub]`);
+    if (/const slot = CARD_META\[[^\]]+\]\.sub;/.test(code)) hits.push(`${f}: slot = CARD_META[..].sub`);
+  }
+  ok(!hits.length, `T59c 仍把 CARD_META.sub 当槽位键：${hits.join('、')}`);
+}
+
 // ---------------- 汇总 ----------------
 console.log(`\nBUGFIX-CHECK：通过 ${pass} / 失败 ${fail}`);
 if (bad.length) { console.log('失败明细：'); for (const b of bad) console.log('  ✗ ' + b); }

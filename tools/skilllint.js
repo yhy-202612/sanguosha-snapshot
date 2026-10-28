@@ -2,9 +2,12 @@
 // 用途：新增批次后快速发现历史上反复踩过的写法错误（不替代 *_check.js 的行为断言）。
 // 用法：node tools/skilllint.js [--verbose]
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// ★SG036：Windows 下 URL.pathname 是 '/C:/xxx'，path.resolve 会拼出 'C:\\C:\\xxx' → 扫不到文件。
+//   必须用 fileURLToPath 转成本地路径。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKILL_DIR = path.join(ROOT, 'src/skills');
 const verbose = process.argv.includes('--verbose');
 

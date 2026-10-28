@@ -1,7 +1,7 @@
 // 线下叙事包（narrative）：蚀心入魔·嗔（8 将）+ 雁翎耀光（界蔡文姬 / 界孙策）
 // 资料：萌娘百科 / 百度百科 / 哔哩哔哩 wiki（详见 tools/narrativecheck.js 头部说明与交付总结）
 import { defineSkill, getSkill, effSkills } from '../engine/skill.js';
-import { CARD_META, cardLabel, isRed } from '../engine/cards.js';
+import { CARD_META, cardLabel, isRed , EQUIP_SUB } from '../engine/cards.js';
 import { pindian } from '../engine/pindian.js';
 
 let vseq = 0;
@@ -506,11 +506,12 @@ async function jiaozongMove(ctx) {
   const cands = g.alive();
   const t = (await ctx.ask.targets(p, { prompt: '【骄纵】：将装备牌移给一名角色', candidates: cands, min: 1, max: 1 }))[0];
   if (!t) return;
-  const free = SLOTS.find(k => !t.equips[k] && !(t.flags.disabledEquip || {})[k]);
+  // ★SG036 P1：按牌的牌型定槽位（原来「随便找空槽」会把坐骑塞进武器栏）
+  const want = EQUIP_SUB[CARD_META[pick.c.name]?.sub];
+  const free = !!want && !(t.flags.disabledEquip || {})[want];
   if (!free) { await ctx.log(`【骄纵】：${t.name} 没有可用的装备栏`); return; }
   await g.unequipCard(pick.q, pick.c, { reason: 'jiaozong' });
-  t.equips[free] = pick.c;
-  await g.trigger('equip.change', { self: t, card: pick.c, slot: free });
+  await g.forceEquip(t, pick.c, { reason: 'jiaozong' });
   const color = isRed(pick.c) ? 'red' : 'black';
   t.flags.jiaozongColor = color;
   t.flags.jiaozongTurn = g.turnCount;

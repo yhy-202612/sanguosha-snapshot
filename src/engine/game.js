@@ -875,16 +875,18 @@ export class Game {
           if (spec.alwaysClear) { try { spec.clear(holder, [], []); } catch { /* ignore */ } }
           continue;
         }
-        // ★SG035-r2 P1：crossPlayer 容器里可能混着多个施放者的牌（A、B 都【破军】过同一目标）。
-        //   只回收属于本次被回收玩家（施放者）的那批 —— 否则任何角色死亡/失技都会把
-        //   全桌的「军」「寇」一起扫进弃牌堆。无 heldFrom 标记的按旧行为回收（宁可回收，避免滞留）。
+        // ★SG035-r2 P1 / SG036 P0：crossPlayer 容器里可能混着多个施放者的牌（A、B 都【破军】过同一目标）。
+        //   ① holder 就是本次被回收的玩家 → 他身上的牌全部要退（持牌者死亡时，尸体上不能留牌，无论谁扣的）；
+        //   ② holder 是别人 → 只退「自己扣的」那批（否则无关角色死亡/失技会把全桌的牌一起扫进弃牌堆）。
+        //   无 heldFrom 标记的按旧行为回收（宁可回收，避免滞留）。
         const mineOf = (c) => {
           if (!spec.crossPlayer || typeof spec.fromSeat !== 'function') return true;
           const from = spec.fromSeat(c);
-          return from == null || from === player.seat;
+          if (from == null) return true;
+          return holder === player || from === player.seat;
         };
         const arrMine = spec.crossPlayer ? arr.filter(mineOf) : arr;
-        if (!arrMine.length) continue;   // 全是别人扣置的牌：一张都不动
+        if (!arrMine.length) continue;   // 全是别人扣置、且持牌者还活着：一张都不动
         const { cards, keep } = this._sweepHeldArr(arrMine);
         if (!cards.length) {
           // 「只清不返回」型容器（虚拟牌 / 合成牌，如 extraWeaponCard、guifu）也必须清空，

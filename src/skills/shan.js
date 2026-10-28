@@ -1,7 +1,7 @@
 // 神话再临·山（SG010）：刘禅 / 张郃 / 邓艾 / 姜维 / 孙策 / 张昭张纮 / 蔡文姬
 // （左慈的【化身】依赖 M11 化身机制，单独一批实现）
 import { defineSkill, getSkill, effSkills } from '../engine/skill.js';
-import { CARD_META, cardLabel, suitOf, isRedFor } from '../engine/cards.js';
+import { CARD_META, cardLabel, suitOf, isRedFor, EQUIP_SUB } from '../engine/cards.js';
 import { GENERALS } from '../data/generals.js';
 
 async function pickHand(ctx, player, test, prompt) {
@@ -335,13 +335,10 @@ defineSkill({
       if (!ts.length) return;
       const c = await pickHand(ctx, p, x => CARD_META[x.name]?.sub, '【直谏】：选择一张装备牌');
       if (!c) return;
-      const slot = CARD_META[c.name].sub;
+      // ★SG036 P1：同【援护】，sub('horse+'/'horse-') 不是槽位键 → 统一走 forceEquip
       const t = ts[0];
       p.hand = p.hand.filter(x => x !== c);
-      const old = t.equips[slot];
-      if (old) await g.discardCards(t, [old], { reason: 'zhijian' });
-      t.equips[slot] = c;
-      await g.trigger('equip.change', { self: t, slot, card: c, old: old || null });
+      await g.forceEquip(t, c, { reason: 'zhijian' });
       await ctx.draw(p, 1, { reason: 'zhijian' });
       await ctx.log(`${p.name} 发动【直谏】：将 ${cardLabel(c)} 置入 ${t.name} 的装备区，然后摸一张牌`);
     },
