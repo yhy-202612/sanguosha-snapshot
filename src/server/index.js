@@ -983,8 +983,15 @@ const server = http.createServer(async (req, res) => {
         seat.autoplaying = false; // 玩家亲自操作，托管状态解除
         let answer = body.answer || null;
         if (body.reqKind === 'play' && answer && answer.cardId) {
-          const card = room.game.players[seat.index].hand.find(c => c.id === answer.cardId);
-          answer = { card, targets: (answer.seats || []).map(s => room.game.players[s]).filter(Boolean), asName: answer.asName || null, endPhase: !!answer.endPhase, skill: answer.skill || null, recast: !!answer.recast };
+          const me = room.game.players[seat.index];
+          // extraCards：把两张手牌当一张牌使用（目前用于【丈八蛇矛】两张当【杀】）
+          const extraCards = (answer.extraCards || [])
+            .map(id => me.hand.find(c => c.id === id))
+            .filter(c => c && c.id !== answer.cardId);
+          answer = {
+            card: me.hand.find(c => c.id === answer.cardId), targets: (answer.seats || []).map(s => room.game.players[s]).filter(Boolean),
+            asName: answer.asName || null, extraCards, endPhase: !!answer.endPhase, skill: answer.skill || null, recast: !!answer.recast,
+          };
         }
         item.finish(answer);
         return json(res, 200, { ok: true });

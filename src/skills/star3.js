@@ -137,10 +137,12 @@ defineSkill({
     {
       // skipNext_* 在目标回合开始时转成跳过标记
       on: 'turn.begin', who: 'any', optional: false,
-      filter: (d) => ['draw', 'play', 'discard'].some(k => d.player?.flags?.[`skipNext_${k}`]),
+      filter: (d) => ['draw', 'play', 'discard'].some(k => d.self?.flags?.[`skipNext_${k}`]),
       async effect(ctx) {
-        // ★SG037：turn.begin 的 data = { self }，没有 player 字段（player 只在 filter 里注入）
-        const p = ctx.self, g = ctx.game;
+        // ★SG037-r2：ctx.self 是「技能拥有者」，事件主体是 ctx.data.self。
+        // 跳过标记是打在「回合角色」身上的，必须用事件主体（原写法永不生效）。
+        const p = ctx.data.self, g = ctx.game;
+        if (!p) return;
         for (const k of ['draw', 'play', 'discard']) {
           if (p.flags[`skipNext_${k}`]) {
             p.flags[`skipNext_${k}`] = false;

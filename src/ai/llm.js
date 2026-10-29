@@ -139,6 +139,33 @@ export function enumerateActions(game, me, { rich = true } = {}) {
       }
     }
   }
+  // 【丈八蛇矛】：两张手牌当【杀】（手里没有真【杀】时才给出，优先用真杀）
+  const zbW = me.equips && me.equips.weapon && me.equips.weapon.name === 'zhangba';
+  if (zbW && me.hand.length >= 2 && !me.hand.some(c => c.name === 'sha')) {
+    const pool = me.hand.filter(c => c.name !== 'tao' && c.name !== 'wuxie' && c.name !== 'shan');
+    if (pool.length >= 2) {
+      const pair = [pool[0], pool[1]];
+      let okV = false;
+      try { okV = !!game.virtualAllowed(me, pair, 'sha'); } catch { okV = false; }
+      if (okV) {
+        let cands2 = [];
+        try { cands2 = game.candidatesFor(me, pair[0], 'sha') || []; } catch { cands2 = []; }
+        const scored2 = cands2
+          .filter(t => t !== me)
+          .map(t => ({ t, s: targetScore(game, me, pair[0], t) }))
+          .sort((a, b) => b.s - a.s);
+        for (const { t } of scored2.slice(0, rich ? 2 : 1)) {
+          let ok = false;
+          try { ok = !!game.canUse(me, pair[0], [t], 'sha', [pair[1]])?.ok; } catch { ok = false; }
+          if (!ok) continue;
+          push({
+            type: 'use', card: pair[0], extraCards: [pair[1]], asName: 'sha', targets: [t],
+            label: `丈八蛇矛：${cardText(pair[0])}+${cardText(pair[1])} 当【杀】→ 座 ${t.seat + 1} ${t.generalName || t.name}`,
+          });
+        }
+      }
+    }
+  }
   for (const sk of (game.activeSkillsOf?.(me) || [])) {
     push({ type: 'skill', skill: sk.id, label: `发动技能【${sk.name || sk.id}】` });
   }
@@ -311,7 +338,9 @@ export function makeLLMBrain(seatIndex, opts = {}) {
     if (!act) return null;
     if (act.type === 'end') return { endPhase: true };
     if (act.type === 'skill') return { skill: act.skill };
-    return { card: act.card, targets: act.targets || [] };
+    // asName / extraCards：转化技与【丈八蛇矛】（两张当一张）必须透传，
+    // 否则模型选了候选、服务端只当普通牌用（或直接用不了）。
+    return { card: act.card, targets: act.targets || [], asName: act.asName || null, extraCards: act.extraCards || null };
   };
 
   return {

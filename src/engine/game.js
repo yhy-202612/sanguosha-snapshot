@@ -29,7 +29,8 @@ export const VIRTUAL_RULES = [
   { skill: 'jie_qixi', as: 'guohe', test: (cards) => cards.length === 1 && !isRed(cards[0]) },
   { skill: 'mou_wusheng', as: 'sha', test: (cards) => cards.length === 1 && isRed(cards[0]) },
   { skill: 'guose', as: 'lebu', test: (cards) => cards.length === 1 && cards[0].suit === 'diamond' },
-  { skill: 'zhangba', as: 'sha', test: (cards) => cards.length === 2 },
+  // ★【丈八蛇矛】不在此表：装备不在 player.skills 里，按 skill 名查的规则永远不成立（死规则）。
+  //   已改为 virtualAllowed() 里对 equips.weapon.name==='zhangba' 的特判（主动使用 + respondCard 响应双路径）。
   { skill: 'longhun', as: 'shan', test: (cards) => cards.length === 2 && cards[0].suit === cards[1].suit && cards[0].suit === 'diamond' },
   { skill: 'longhun', as: 'tao', test: (cards) => cards.length === 2 && cards[0].suit === cards[1].suit && cards[0].suit === 'heart' },
   // 扩展点的规则（src/engine/virtual-extra.js）：新增转化技只改那个文件，不动本文件，避免并行分支冲突
@@ -1515,6 +1516,42 @@ export class Game {
       const cands = player.hand.filter(c => this.matchFilter(c, opt.filter, player)
         && this.responseAllowed(player, c)
         && (!allowedIds || allowedIds.has(c.id) || (c.__src && allowedIds.has(c.__src.id))));
+      // 【丈八蛇矛】：手里没有真【杀】时，可将两张手牌当【杀】打出（响应路径）。
+      // ★SG037-r2：此前只实现了「主动使用」（virtualAllowed），决斗/南蛮/万箭要求打出【杀】时
+      //   装了丈八也打不出，装备等于白装——这里补齐响应链路。
+      if (!cands.length && opt.filter && opt.filter.name === 'sha'
+        && player.equips && player.equips.weapon && player.equips.weapon.name === 'zhangba') {
+        const pool = player.hand.filter(c => this.responseAllowed(player, c));
+        if (pool.length >= 2) {
+          const yes = await this.confirm(player, '【丈八蛇矛】：是否将两张手牌当【杀】打出？');
+          if (yes) {
+            const res2 = await this.ask(player, 'cards', {
+              prompt: '【丈八蛇矛】：选择两张手牌当【杀】打出',
+              cards: pool.map(c => c.id), min: 2, max: 2, reason: 'zhangba',
+            });
+            const zids = (res2 && res2.cardIds) || [];
+            const pair = zids.map(id => pool.find(c => c.id === id)).filter(Boolean);
+            if (pair.length === 2 && pair[0] !== pair[1]) {
+              for (const c of pair) {
+                const zi = player.hand.indexOf(c);
+                if (zi >= 0) player.hand.splice(zi, 1);
+                this.clearExtraSlot(player, c);
+                Game.stripCardMarks(c);
+                if (!this.discardPile.includes(c)) this.discardPile.push(c);
+              }
+              const discZb = { self: player, cards: pair, reason: opt.reason || 'respond', taken: [] };
+              await this.trigger('cards.discard', discZb);
+              this.settleTaken(discZb);
+              await this.checkHandChange(player);
+              await this.log(`【丈八蛇矛】：${player.name} 将 ${cardLabel(pair[0])}、${cardLabel(pair[1])} 当【杀】打出`);
+              // 返回虚拟【杀】：id 必须唯一（形如 c40_zb）并标 virtual，
+              //   ★不能沿用源牌 id —— 调用方可能再 useCard（【借刀杀人】），
+              //   同 id 的副本会与已在弃牌堆的实体牌构成「牌张重复」（seed 9135 实测）。
+              return { ...pair[0], id: `${pair[0].id}_zb`, name: 'sha', __src: pair[0], virtual: true, __virtual: 'zhangba' };
+            }
+          }
+        }
+      }
       if (!cands.length) return null;
       const res = await this.ask(player, 'card', {
         prompt: opt.prompt || '请选择一张牌（或取消）',

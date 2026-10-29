@@ -454,10 +454,13 @@ defineSkill({
         await ctx.draw(q, n, { reason: 'xiankuang' });
         await ctx.log(`【贤贶】：${q.name} 摸 ${n} 张牌`);
       } else {
-        // ★SG037：必须在 cards.discard 里把这张牌登记进 taken ——
-        //   否则当「弃牌者就是自己」时，gain 回手牌后引擎的 stillOwned 仍为真，会照样把它推进弃牌堆，
-        //   造成同一张牌同时存在于 discardPile 与 hand（sgbaseline seed=58 guozhan 的双存即此）。
-        (ctx.data.taken || (ctx.data.taken = [])).push(card);
+        // ★SG037-r2：区分 kept / taken（两个语义完全不同，用错会丢牌）——
+        //   taken =「牌已被移去别处，仍从原区域摘除且不入堆」；
+        //   kept  =「牌不离开原区域，也不入堆」。
+        //   弃牌者就是自己（q===p）时：gain 已把手牌摘除又推回，牌仍在自己手里，
+        //   若登记 taken 会被 discardCards 再 splice 一次 → 牌凭空消失（seed 58 丢牌即此）。
+        if (q === p) (ctx.data.kept || (ctx.data.kept = [])).push(card);
+        else (ctx.data.taken || (ctx.data.taken = [])).push(card);
         const di = g.discardPile.indexOf(card);
         if (di >= 0) g.discardPile.splice(di, 1);
         await ctx.gain(p, [card], { from: q, reason: 'xiankuang' });

@@ -9,6 +9,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const S = {
   meta: null, cards: {}, roomId: null, token: null, seat: null,
   snap: null, ask: null, sel: [], targets: [], view: 'lobby', es: null, timer: null, lastPlaySeq: 0,
+  zbMode: false,   // 【丈八蛇矛】两张手牌当【杀】的选牌模式
   logOpen: false, logTouched: false,
   // 大厅配置：武将包多选 / 自定义将池 / 选将模式 / 几选一 / 双将 / 托管
   packs: new Set(['standard']), pool: new Set(), pickMode: 'random',
@@ -1520,6 +1521,16 @@ function syncAskOffset() {
   if (!self) return;
   document.documentElement.style.setProperty('--self-h', `${self.offsetHeight}px`);
 }
+// 自己区高度会随「手牌增减 / 动作栏增删按钮」变化，用 ResizeObserver 持续同步，
+// 否则询问面板底边用的是旧高度，会压住手牌或按钮。
+try {
+  const selfEl = $('#selfArea');
+  if (selfEl && window.ResizeObserver) {
+    const ro = new ResizeObserver(() => syncAskOffset());
+    ro.observe(selfEl);
+    S.__selfRO = ro;
+  }
+} catch {}
 
 function switchView(v) {
   S.view = v;
@@ -2275,6 +2286,17 @@ function renderActions(me) {
     if (fxWasEmpty && bar.children.length && !reduceMotion()) fxOnce(bar, 'fx-bar-in', fxMs('--t-base', 200) + 80);
   });
   if (S.ask?.kind === 'play') {
+    // 【丈八蛇矛】选牌模式：只保留「取消 / 结束出牌」，避免误触只用第一张牌出牌
+    if (S.zbMode) {
+      bar.appendChild(el('div', 'hint', `丈八蛇矛：已选 ${S.sel.length}/2 张${S.sel.length === 2 ? '，请点击上方玩家选择目标' : '，再点一张手牌'}`));
+      const bz = el('button', 'ghost', '取消丈八');
+      bz.onclick = () => { S.zbMode = false; S.sel = []; S.targets = []; renderTable(); };
+      bar.appendChild(bz);
+      const bend = el('button', 'secondary', '结束出牌');
+      bend.onclick = () => submit({ endPhase: true });
+      bar.appendChild(bend);
+      return;
+    }
     const card = S.sel.length === 1 ? (me.hand || []).find(c => c.id === S.sel[0]) : null;
     const nameOf = (s) => (S.snap?.players || []).find(p => p.seat === s)?.name || `座位${s}`;
     if (card) {
@@ -2291,6 +2313,14 @@ function renderActions(me) {
     const b2 = el('button', 'secondary', '结束出牌');
     b2.onclick = () => submit({ endPhase: true });
     bar.appendChild(b1); bar.appendChild(b2);
+    // 【丈八蛇矛】：装备了武器时提供「两张手牌当【杀】」的入口
+    //   （引擎侧已支持 useCard extraCards + respondCard 双牌响应，这里只是人类玩家的操作入口）
+    if (me.equips && me.equips.weapon && me.equips.weapon.name === 'zhangba') {
+      const bz = el('button', 'secondary', '丈八·两张当杀');
+      bz.title = '【丈八蛇矛】：将两张手牌当【杀】使用';
+      bz.onclick = () => { S.zbMode = true; S.sel = []; S.targets = []; renderTable(); };
+      bar.appendChild(bz);
+    }
     // 重铸（【铁索连环】等）：弃置此牌并摸一张，不视为使用
     if (card && S.cards?.[card.name]?.recast) {
       const br = el('button', 'secondary', '重铸（弃置摸一张）');
@@ -2298,8 +2328,10 @@ function renderActions(me) {
       br.onclick = () => submit({ cardId: card.id, recast: true });
       bar.appendChild(br);
     }
+    // 手机：技能按钮省掉「发动」二字，避免动作栏一排挤满（挤满会换行→顶掉手牌与按钮）
+    const compactSkill = isMobileLayout();
     for (const sk of me.activeSkills || []) {
-      const b = el('button', '', `发动【${sk.name}】`);
+      const b = el('button', '', compactSkill ? `【${sk.name}】` : `发动【${sk.name}】`);
       b.title = sk.desc || '';
       b.onclick = () => submit({ skill: sk.id });
       bar.appendChild(b);
@@ -2316,6 +2348,8 @@ function currentCardMeta() {
 
 function isTargetSelectable(p) {
   if (S.ask?.kind === 'targets') return (S.ask.targets || []).includes(p.seat);
+  // 丈八蛇矛：选满两张后，目标规则与【杀】一致（可选其他存活角色）
+  if (S.zbMode && S.ask?.kind === 'play') return p.alive && p.seat !== S.seat && S.sel.length === 2;
   if (S.ask?.kind === 'play' && S.sel.length === 1 && p.alive) {
     const meta = currentCardMeta();
     if (!meta || !meta.target) return false;
@@ -2332,6 +2366,7 @@ function isTargetSelectable(p) {
 // 只在"正在选目标"时生效，避免无谓地压暗全场
 function fxTargetMode() {
   if (S.ask?.kind === 'targets') return true;
+  if (S.zbMode && S.ask?.kind === 'play') return S.sel.length === 2;
   if (S.ask?.kind === 'play' && S.sel.length === 1) {
     const meta = currentCardMeta();
     return !!(meta && meta.target && (meta.target.min || 0) > 0);
@@ -2355,6 +2390,15 @@ function fxTargetClear() {
 }
 
 function toggleTarget(seat) {
+  if (S.zbMode && S.ask?.kind === 'play') {
+    if (S.sel.length !== 2) return toast('请先选择两张手牌', 1600);
+    const who = (S.snap?.players || []).find(p => p.seat === seat);
+    if (!who || !who.alive || seat === S.seat) return;
+    S.targets = [seat];
+    renderTable();
+    submitZhangba();
+    return;
+  }
   if (S.ask?.kind === 'targets') {
     const max = S.ask.max || 1;
     if (S.targets.includes(seat)) S.targets = S.targets.filter(s => s !== seat);
@@ -2387,6 +2431,7 @@ function clickCard(card, force) {
   const allowed = allowedCardIds();
   if (allowed && !allowed.includes(card.id)) return;
   const a = S.ask;
+  if (S.zbMode && a && a.kind === 'play') { zbClickCard(card); return; }
   if (a && a.kind === 'card') { submit({ cardId: card.id }); return; }
   if (a && (a.kind === 'discard' || a.kind === 'cards')) {
     const max = a.max || 1;
@@ -2399,6 +2444,25 @@ function clickCard(card, force) {
   if (S.sel.includes(card.id)) { S.sel = []; S.targets = []; }
   else { S.sel = [card.id]; S.targets = autoTargetSeats(card); }
   renderTable();
+}
+
+// 【丈八蛇矛】：把已选的两张手牌当【杀】使用（人类玩家入口）
+function submitZhangba() {
+  if (S.sel.length !== 2) return toast('请先选择两张手牌', 1600);
+  const ids = S.sel.slice();
+  if (!S.targets.length) return toast('请点击上方玩家选择【杀】的目标', 1600);
+  S.zbMode = false;
+  try { fxFlyCards(ids); } catch {}
+  submit({ cardId: ids[0], extraCards: [ids[1]], asName: 'sha', seats: S.targets.slice() });
+}
+
+// 丈八选牌模式：点牌 = 复选（最多 2 张）
+function zbClickCard(card) {
+  if (S.sel.includes(card.id)) S.sel = S.sel.filter(x => x !== card.id);
+  else { S.sel.push(card.id); if (S.sel.length > 2) S.sel.shift(); }
+  S.targets = [];
+  renderTable();
+  if (S.sel.length === 2) toast('已选两张，请点击上方玩家选择【杀】的目标', 1800);
 }
 
 // 与引擎 autoTargetsFor 同口径：「只能指定自己」与「所有角色」的牌没有可挑的余地，直接填好目标

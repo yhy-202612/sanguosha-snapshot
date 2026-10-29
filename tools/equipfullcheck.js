@@ -342,6 +342,29 @@ console.log('=== 装备效果全量检查（25 种）===');
   ok(g2.virtualAllowed(q0, q0.hand, 'sha') === false, '没有丈八蛇矛时两张手牌不应能当【杀】');
 }
 
+// ---------- 18b. 丈八蛇矛：响应【杀】要求时也能两张当杀（SG037-r2） ----------
+{
+  const resp = mkResp({ confirm: () => true });
+  // 自定义：手里没有真【杀】，confirm 一律同意，选牌取前两张
+  resp.ask = async (g, p, req) => {
+    if (req.kind === 'confirm') return { yes: true };
+    if (req.kind === 'cards') return { cardIds: (req.cards || []).slice(0, 2) };
+    if (req.kind === 'card') return null;
+    return null;
+  };
+  const g = newGame({ resp });
+  const z0 = g.players[0];
+  equip(z0, 'zhangba');
+  const za = mk('shan', 'club', 3), zb = mk('tao', 'heart', 4);
+  z0.hand = [za, zb];
+  const zBefore = g.discardPile.length;
+  const zGot = await g.respondCard(z0, { filter: { name: 'sha' }, prompt: '请打出【杀】' });
+  ok(!!zGot && zGot.name === 'sha', '[丈八蛇矛] 响应【杀】要求时可把两张手牌当【杀】打出');
+  ok(!z0.hand.includes(za) && !z0.hand.includes(zb), '[丈八蛇矛] 响应用掉的两张牌应从手牌移出');
+  ok(g.discardPile.includes(za) && g.discardPile.includes(zb),
+    `[丈八蛇矛] 响应后两张牌各进弃牌堆一次（${zBefore} → ${g.discardPile.length}）`);
+}
+
 // ---------- 19. 雌雄双股剑：对异性目标可令其弃牌或你摸牌 ----------
 {
   const g = newGame({ resp: mkResp({ choice: () => 0, confirm: () => true }) });

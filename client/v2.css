@@ -201,3 +201,63 @@ body.ask-open .fx5-slot{top:31%}
   .fx5-opp{top:38%}
   .fx5-opp .fx5-opp-card{width:64px;height:90px}
 }
+
+/* =====================================================================
+   ⑨ 出牌/选牌时不得挤掉下方按键（2026-10-29 修）
+   背景：手机竖屏 #app 是 100dvh 固定高、#table overflow:hidden。
+   一旦中央岛或询问面板把 #selfArea（手牌 + 出牌/结束回合按钮）顶出
+   视口，按钮会被 overflow:hidden 直接裁掉、且无法滚动找回 → 表现为
+   「点出某些牌后下方按键消失」。
+   修法：①中央岛可压缩、自己区永不被压缩；②超屏时兜底可滚动；
+        ③询问面板层级抬到战报抽屉/他人出牌浮层之上；④需要我操作时
+        自动收起战报抽屉（用户手动点开的除外）。
+   ===================================================================== */
+
+/* ① 自己区（手牌 + 按钮）永不被压缩；中央岛让位 */
+#table > #selfArea{flex:0 0 auto}
+#table > #tableCenter{flex:1 1 0;min-height:0}
+
+/* ② 兜底：真的超高时允许滚动，而不是把按钮裁掉 */
+#table{overflow-y:auto;overscroll-behavior:contain}
+
+/* ③ 询问面板必须在战报抽屉(60)/他人出牌浮层(62) 之上 */
+#askPanel{z-index:70}
+
+/* ④ 动作栏高度必须恒定：一行放不下就横滑，绝不换行
+      （换行 = 自己区瞬间变高 = 手牌与按钮被挤出视口） */
+.actions .hint{
+  flex:1 1 auto;min-width:0;max-width:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+
+/* ⑤ 手机：动作栏单行横滑 + 按钮收窄；自己区贴底；抽屉为自己区让位 */
+@media (max-width:760px){
+  .actions{
+    flex-wrap:nowrap;justify-content:flex-start;
+    overflow-x:auto;overflow-y:hidden;scrollbar-width:none;
+    min-height:48px;padding:2px 0 max(6px,env(safe-area-inset-bottom));
+  }
+  .actions::-webkit-scrollbar{display:none}
+  .actions > *{flex:0 0 auto}
+  .actions button{min-width:auto;min-height:40px;padding:6px 10px;font-size:var(--fs-sm)}
+  #selfArea{
+    position:sticky;bottom:0;z-index:20;
+    background:linear-gradient(180deg,rgba(12,15,21,.86),rgba(12,15,21,.98));
+    backdrop-filter:blur(6px);
+  }
+  #tableCenter{min-height:72px}
+  .fx5-opp{top:34%}
+  /* 战报抽屉：高度扣掉自己区，保证手牌与按钮永远露在抽屉上方 */
+  #logPanel{height:min(56dvh, calc(100dvh - var(--self-h,220px) - 10px))}
+}
+
+/* ---------- ⑩ 矮屏（App 内嵌 / 小屏手机）再压一档，确保手牌+按钮一定放得下 ---------- */
+@media (max-width:760px) and (max-height:780px){
+  #tableCenter{min-height:56px}
+  #selfInfo{min-height:24px;font-size:var(--fs-sm)}
+  .hand,#handRow{height:112px;padding:12px 4px 6px}
+  .card{width:60px;height:84px}
+  .card .cn{font-size:15px}
+  .actions{min-height:44px}
+  .actions button{min-height:36px;padding:5px 9px}
+}

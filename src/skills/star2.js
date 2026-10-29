@@ -357,11 +357,12 @@ defineSkill({
     {
       // 死印（附加）：任意角色的结束阶段开始前，带死印者失去 1 点体力
       on: 'phase.begin', who: 'any', optional: false,
-      filter: (d) => d.phase === 'end' && !!d.player?.marks?.siyin,
+      filter: (d) => d.phase === 'end' && !!d.self?.marks?.siyin,
       async effect(ctx) {
-        // ★SG037：phase.begin 的 data = { self, phase }，没有 player 字段（player 只在 filter 里注入）
-        const t = ctx.self;
-        if (!t.alive || t.marks.siyin === 'paid') return;
+        // ★SG037-r2：ctx.self 是「技能拥有者」，事件主体是 ctx.data.self。
+        // 死印可以附加在任意角色身上，所以必须用事件主体（原写法读 d.player / ctx.self 永不生效）。
+        const t = ctx.data.self;
+        if (!t || !t.alive || t.marks.siyin === 'paid') return;
         await ctx.log(`【死印】：${t.name} 结束阶段失去 1 点体力`);
         await ctx.loseHp(t, 1, { reason: 'siyin' });
       },

@@ -321,6 +321,24 @@ export class AIPlayer {
       if (cands.length && game.canUse(p, c, [cands[0]], 'sha').ok) return { card: c, asName: 'sha', targets: [cands[0]] };
     }
 
+    // 丈八蛇矛：没有真【杀】时，把两张「不心疼」的手牌当【杀】用
+    //   （value() 低者优先；不吃【桃】【闪】【无懈】这类关键牌）
+    if (p.equips && p.equips.weapon && p.equips.weapon.name === 'zhangba' && p.hand.length >= 2 && enemies.length) {
+      const pool = p.hand.filter(c => c.name !== 'sha' && c.name !== 'tao' && c.name !== 'wuxie' && c.name !== 'shan');
+      pool.sort((a, b) => value(a) - value(b));
+      if (pool.length >= 2) {
+        const pair = [pool[0], pool[1]];
+        if (game.virtualAllowed(p, pair, 'sha')) {
+          const cands = game.candidatesFor(p, pair[0], 'sha').filter(t => isEnemy(game, p, t));
+          const t = cands.sort((a, b) => a.hp - b.hp)[0];
+          if (t && game.canUse(p, pair[0], [t], 'sha', [pair[1]], {}).ok
+            && (t.hp <= 2 || game.rng.next() < this.aggression)) {
+            return { card: pair[0], extraCards: [pair[1]], asName: 'sha', targets: [t] };
+          }
+        }
+      }
+    }
+
     // 7) 决斗 / 火攻 / 万箭 / 南蛮
     const juedou = p.hand.find(c => c.name === 'juedou');
     if (juedou && p.hand.length >= 2) {
