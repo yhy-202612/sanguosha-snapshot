@@ -139,7 +139,8 @@ defineSkill({
       on: 'turn.begin', who: 'any', optional: false,
       filter: (d) => ['draw', 'play', 'discard'].some(k => d.player?.flags?.[`skipNext_${k}`]),
       async effect(ctx) {
-        const p = ctx.data.player, g = ctx.game;
+        // ★SG037：turn.begin 的 data = { self }，没有 player 字段（player 只在 filter 里注入）
+        const p = ctx.self, g = ctx.game;
         for (const k of ['draw', 'play', 'discard']) {
           if (p.flags[`skipNext_${k}`]) {
             p.flags[`skipNext_${k}`] = false;

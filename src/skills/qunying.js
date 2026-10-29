@@ -581,7 +581,9 @@ defineSkill({
       async effect(ctx) {
         const d = ctx.data;
         d.amount += 1;
-        await ctx.log(`【工巧】：${d.player.name} 的【杀】基础值 +1`);
+        // ★SG037：damage.before 的原始 data 里没有 player 字段（player 只由 trigger 注入给 filter），
+        //   effect 里必须用 ctx.self（= 技能拥有者，与 filter 的 d.player 同一人），否则静默 ⚠ 不生效。
+        await ctx.log(`【工巧】：${ctx.self.name} 的【杀】基础值 +1`);
       },
     },
     {
@@ -1615,7 +1617,8 @@ defineSkill({
       async effect(ctx) {
         const d = ctx.data;
         d.amount = Math.max(d.amount || 1, d.target.hp);
-        d.player.flags.zhuilieSeat = -1;
+        // ★SG037：sha.hit 的 data = { self: 使用者, target, card, amount }，没有 player 字段
+        ctx.self.flags.zhuilieSeat = -1;
         await ctx.log(`【追猎】：伤害值增至 ${d.amount}`);
       },
     },

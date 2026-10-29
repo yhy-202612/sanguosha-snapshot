@@ -60,7 +60,8 @@ for (let i = 0; i < N; i++) {
   // 护甲不超上限、谋略值不越界
   for (const p of game.players) {
     if ((p.armor || 0) > (p.armorMax || 99)) { fail++; problems.push(`seed ${seed}: ${p.generalName} 护甲 ${p.armor} 超上限 ${p.armorMax}`); }
-    if ((p.moulue || 0) > 5) { fail++; problems.push(`seed ${seed}: ${p.generalName} 谋略值 ${p.moulue} 超 5`); }
+    // 谋略值上限会被【穷谋】提高到 10（custom.js:36），断言必须按 moulueMax 判，不能写死 5
+    if ((p.moulue || 0) > (p.moulueMax || 5)) { fail++; problems.push(`seed ${seed}: ${p.generalName} 谋略值 ${p.moulue} 超上限 ${p.moulueMax}`); }
   }
 }
 

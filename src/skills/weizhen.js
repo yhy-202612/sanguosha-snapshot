@@ -454,9 +454,13 @@ defineSkill({
         await ctx.draw(q, n, { reason: 'xiankuang' });
         await ctx.log(`【贤贶】：${q.name} 摸 ${n} 张牌`);
       } else {
+        // ★SG037：必须在 cards.discard 里把这张牌登记进 taken ——
+        //   否则当「弃牌者就是自己」时，gain 回手牌后引擎的 stillOwned 仍为真，会照样把它推进弃牌堆，
+        //   造成同一张牌同时存在于 discardPile 与 hand（sgbaseline seed=58 guozhan 的双存即此）。
+        (ctx.data.taken || (ctx.data.taken = [])).push(card);
         const di = g.discardPile.indexOf(card);
         if (di >= 0) g.discardPile.splice(di, 1);
-        await ctx.gain(p, [card], { reason: 'xiankuang' });
+        await ctx.gain(p, [card], { from: q, reason: 'xiankuang' });
         p.flags.xiankuangGot = (p.flags.xiankuangGot || 0) + 1;
         await ctx.log(`【贤贶】：获得 ${cardLabel(card)}`);
         if (p.flags.xiankuangGot > 1) {

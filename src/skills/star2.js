@@ -359,7 +359,8 @@ defineSkill({
       on: 'phase.begin', who: 'any', optional: false,
       filter: (d) => d.phase === 'end' && !!d.player?.marks?.siyin,
       async effect(ctx) {
-        const t = ctx.data.player;
+        // ★SG037：phase.begin 的 data = { self, phase }，没有 player 字段（player 只在 filter 里注入）
+        const t = ctx.self;
         if (!t.alive || t.marks.siyin === 'paid') return;
         await ctx.log(`【死印】：${t.name} 结束阶段失去 1 点体力`);
         await ctx.loseHp(t, 1, { reason: 'siyin' });

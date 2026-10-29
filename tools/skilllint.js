@@ -148,6 +148,50 @@ const BANNED = ['jie_', 'mou_', 'ji_', 'shen_', 'sp_', 'ol_'];
   else pass++;
 }
 
+// ---------- N. effect 里读 data.player（事件原始 data 没有 player 字段，必崩成静默 ⚠） ----------
+{
+  const hits = [];
+  for (const [f, src] of srcOf) {
+    for (const m of src.matchAll(/(?:async\s+)?effect\s*\(([^)]*)\)\s*\{/g)) {
+      let i = m.end - 1, depth = 0, j = i;
+      while (j < src.length) {
+        const ch = src[j];
+        if (ch === '{') depth++;
+        else if (ch === '}' && --depth === 0) break;
+        j++;
+      }
+      const blk = src.slice(i, j);
+      if (/ctx\.data\.player\b|\bdata\.player\b|\bd\.player\b/.test(blk)) {
+        const line = src.slice(0, m.index).split('\n').length;
+        hits.push(`${f}:${line}`);
+      }
+    }
+  }
+  ok(!hits.length,
+    `effect 内读 data.player（引擎派发的 data 没有 player 字段，只会静默崩成「⚠ 技能执行异常」；`
+    + `filter 里才有——effect 内请用 ctx.self / ctx.data.self）：${hits.slice(0, 8).join('、')}`);
+}
+
+// ---------- N+1. cards.discard 里把牌 gain 走却没登记 taken（会与弃牌堆双存） ----------
+{
+  const hits = [];
+  for (const [f, src] of srcOf) {
+    for (const m of src.matchAll(/on:\s*'cards\.discard'/g)) {
+      const blk = src.slice(m.index, m.index + 1600);
+      const end = blk.search(/\n\s*\},\s*\n\s*\{?\s*\n?\s*(?:on:|\],)/);
+      const seg = end > 0 ? blk.slice(0, end) : blk;
+      if (/ctx\.gain\(|ctx\.gainCards\(/.test(seg) && !/taken/.test(seg) && !/kept/.test(seg)) {
+        const line = src.slice(0, m.index).split('\n').length;
+        hits.push(`${f}:${line}`);
+      }
+    }
+  }
+  // 降级为提示：只有当「把本批牌交回**弃牌者本人**」时才必须登记 taken（贤貺那类）；
+  // 交给别人时引擎的 cardLocated 会跳过入堆，不需要 taken。所以这条只作线索，真伪以 sgbaseline 守恒检查为准。
+  if (hits.length) note(`cards.discard 里 gain 走牌但没登记 taken（仅「交回弃牌者本人」时才需要，多数为误报）：${hits.slice(0, 8).join('、')}`);
+  else pass++;
+}
+
 // ---------- 输出 ----------
 console.log(`skilllint：通过 ${pass} / 失败 ${bad.length}（扫描 ${files.length} 个技能文件）`);
 if (bad.length) {

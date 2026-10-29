@@ -121,6 +121,12 @@ export function enumerateActions(game, me, { rich = true } = {}) {
     if (!allowSelf && !scored.length) continue;
     const lim = rich ? 2 : 1;                       // 强度高 → 同一张牌给两个目标备选
     for (const { t } of scored.slice(0, lim)) {
+      // ★候选动作必须过 canUse：否则「本回合【杀】已用尽」「本回合不能使用【杀】（将驰/自守）」
+      //   「距离不足」等非法动作也会进候选表，模型选了被服务端拒绝后还会反复重试，
+      //   对战报刷出大量「✗ 使用 杀 失败」并把回合耗光（截图实测 5 次以上）。
+      let okUse = true;
+      try { okUse = !!game.canUse(me, c, [t])?.ok; } catch { okUse = false; }
+      if (!okUse) continue;
       push({ type: 'use', card: c, targets: [t], label: `使用【${cardText(c)}】→ 座 ${t.seat + 1} ${t.generalName || t.name}` });
     }
     if (c.name === 'sha' && game.alive().length > 2 && rich && scored.length >= 2) {

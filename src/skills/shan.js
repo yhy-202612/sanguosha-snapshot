@@ -370,7 +370,12 @@ defineSkill({
         if (!entry || !entry.cards.length) return;
         const back = entry.cards[0];
         const rest = entry.cards.slice(1);
-        await ctx.gain(owner, [back], { from: p, reason: 'guzheng' });
+        // ★SG037：这些牌在本回合弃牌阶段已进入**弃牌堆**，必须先摘出来再交给角色。
+        //   旧实现给 `from: p`（固政持有者）甚至完全不传 from → 弃牌堆那份从不摘除，
+        //   同一张牌同时存在于 discardPile 与 hand（sgbaseline 报的 discard | pX.hand 双存即此）。
+        await ctx.game.takeCard(back);
+        for (const c of rest) await ctx.game.takeCard(c);
+        await ctx.gain(owner, [back], { reason: 'guzheng' });
         if (rest.length) await ctx.gain(p, rest, { reason: 'guzheng' });
         await ctx.log(`${p.name} 发动【固政】：交还 ${owner.name} 1 张牌，获得其余 ${rest.length} 张`);
       },

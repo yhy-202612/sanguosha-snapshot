@@ -249,6 +249,19 @@ async function playOneGame({ modeId, seatCount, seed, index }) {
 
     for (const f of hard) {
       const key = `${f.kind}:${f.id}`;
+      if (process.env.DEBUG_DUP && f.kind === 'dup') {
+        // 同一时刻的权威判定：该 id 到底在哪些真实区域里
+        const id = f.id;
+        const where = [];
+        if (game.discardPile.some(c => c && String(c.id) === id)) where.push('discardPile');
+        if (game.deck.some(c => c && String(c.id) === id)) where.push('deck');
+        for (const p of game.players) {
+          if (p.hand.some(c => c && String(c.id) === id)) where.push(`p${p.seat}.hand`);
+          if (Object.values(p.equips || {}).some(c => c && String(c.id) === id)) where.push(`p${p.seat}.equips`);
+        }
+        console.log(`[DEBUG_DUP] T${game.turnCount} id=${id} snapshot 称 places=${f.places.join(' / ')} | 实时区域=${where.join(',') || '（都不在）'}`);
+        for (const r of (trail.get(id) || []).slice(-12)) console.log(`   T${r.turn} ${r.kind}  @ ${r.stack}`);
+      }
       if (!dupSeen.has(key)) dupSeen.set(key, { turn: game.turnCount, label, detail: f });
     }
     for (const f of lost) {
@@ -264,6 +277,28 @@ async function playOneGame({ modeId, seatCount, seed, index }) {
     else if (lost.length) { if (STRICT) consFail++; else consWarn++; }
     else consPass++;
   };
+
+  // ★DEBUG_DUP=1：记录每张牌的流转栈，用于定位 dup 双存的来源（平时不记录，零开销）
+  const DBG = !!process.env.DEBUG_DUP;
+  const trail = new Map();
+  const trailOf = (c, kind) => {
+    if (!DBG || !c || c.id == null) return;
+    const k = String(c.id);
+    if (!trail.has(k)) trail.set(k, []);
+    trail.get(k).push({ kind, turn: game.turnCount, stack: new Error().stack.split('\n').slice(3, 6).map(x => x.trim().replace(/^at /, '')).join(' < ') });
+  };
+  if (DBG) {
+    const oPD = game.pushDiscard.bind(game);
+    game.pushDiscard = (cards) => { for (const c of (Array.isArray(cards) ? cards : [cards])) trailOf(c, '→discard'); return oPD(cards); };
+    const oGC = game.gainCards.bind(game);
+    game.gainCards = async (pl, cards, opts) => { for (const c of (cards || [])) trailOf(c, `→gain:p${pl.seat}(from=${opts?.from ? 'p' + opts.from.seat : 'null'},reason=${opts?.reason || ''})`); return oGC(pl, cards, opts); };
+    for (const p of game.players) {
+      for (const m of ['push', 'unshift', 'splice']) {
+        const orig = p.hand[m].bind(p.hand);
+        p.hand[m] = (...a) => { const r = orig(...a); if (m !== 'splice') for (const c of a) trailOf(c, `p${p.seat}.hand.${m}`); return r; };
+      }
+    }
+  }
 
   const origRunTurn = game.runTurn.bind(game);
   game.runTurn = async (p) => {

@@ -129,6 +129,34 @@ async function main() {
   ok(!threw, `V6a fxScrollActiveIntoView 不应抛错（${threw && threw.message}）`);
 
 
+  // ⑦ 他人打出的牌：桌面中央显示牌面（lastPlay.seat 不是我时）
+  {
+    ok(!!FN.fxOppPlay, 'V7p fxOppPlay 应已导出（他人出牌展示）');
+    const snapLp = {
+      turn: 6, phase: 'play', currentIndex: 1, deckCount: 20, discardCount: 3, over: false,
+      lastPlay: { seq: 99, seat: 1, player: '电脑1', name: 'sha', cn: '杀♠9', suit: 'spade', num: 9, targets: [0] },
+      players: [
+        { seat: 0, name: '我', generalName: '孙权', kingdom: 'wu', hp: 4, maxHp: 4, alive: true, handCount: 2, equips: {}, judgeZone: [], marks: {} },
+        { seat: 1, name: '电脑1', generalName: '曹操', kingdom: 'wei', hp: 3, maxHp: 4, alive: true, handCount: 3, equips: {}, judgeZone: [], marks: {} },
+      ],
+    };
+    const cardsMap = { sha: { cn: '杀', type: 'basic' }, shan: { cn: '闪', type: 'basic' } };
+    S.seat = 0; S.snap = snapLp; S.cards = cardsMap; S.ask = null; S.targets = []; S.lastPlaySeq = 0; S.view = 'table';
+    FN.fxOppPlay(snapLp);
+    const box = doc.getElementById('fx5Opp');
+    ok(!!box && box.classList.contains('on'), 'V7q 他人出牌应显示中央牌位（#fx5Opp.on）');
+    ok(box && /杀/.test(box.textContent), 'V7r 牌位应显示牌名');
+    ok(box && /电脑1/.test(box.textContent), 'V7s 牌位应显示是谁打出的');
+    // 同一 seq 不重复弹；自己的牌不弹
+    box.classList.remove('on');
+    FN.fxOppPlay(snapLp);
+    ok(!box.classList.contains('on'), 'V7t 同一 seq 不应重复弹出');
+    S.lastPlaySeq = 0;
+    FN.fxOppPlay({ ...snapLp, lastPlay: { ...snapLp.lastPlay, seq: 100, seat: 0 } });
+    ok(!doc.getElementById('fx5Opp').classList.contains('on'), 'V7u 自己打出的牌不走中央牌位（有手牌飞牌动画）');
+    box.remove();
+  }
+
   // ⑦ 桌面对手分列（网杀三栏）：3 人对手 → 左 2 右 1；1 人 → opp-t
   {
     const mkP = (seat, name, hp) => ({ seat, name, generalName: '曹操', kingdom: 'wei', hp, maxHp: 4, alive: true, handCount: 2, equips: {}, judgeZone: [], marks: {} });

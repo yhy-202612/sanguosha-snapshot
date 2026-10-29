@@ -981,6 +981,10 @@ export class Game {
 
   // ---------------- 出牌 ----------------
   virtualAllowed(player, cards, asName) {
+    // ★装备提供的转化规则：【丈八蛇矛】两张手牌可当【杀】使用或打出。
+    //   此前只有 CARD_META 里写了描述、没有任何实现 → 装了丈八完全没有效果（equipfullcheck 抓出）。
+    if (asName === 'sha' && Array.isArray(cards) && cards.length === 2
+      && player?.equips?.weapon?.name === 'zhangba') return true;
     // 于吉【蛊惑】：被技能标记的单张手牌可当作任意基本牌/非延时锦囊使用
     // （标记由技能自身设置，避免放开其他玩家的普通牌）
     if (cards.length === 1 && cards[0] && cards[0].__guhuo
@@ -1205,6 +1209,16 @@ export class Game {
     const dpi = this.discardPile.indexOf(card);
     if (dpi >= 0) this.discardPile.splice(dpi, 1);
     if (!this.table.includes(card)) this.table.push(card);
+    // ★「谁出了什么牌」广播（前端据此在桌面中央展示**他人**打出的牌）：
+    //   此前只有自己的手牌有飞牌动画，别人的牌只能从战报文字里读，看不到牌面。
+    this.lastPlay = {
+      seq: ((this.lastPlay && this.lastPlay.seq) || 0) + 1,
+      seat: from.seat, player: from.name,
+      name: effName, cn: cardLabel(effCard),
+      suit: card?.suit || null, num: card?.num || null,
+      targets: targets.map(t => t.seat),
+      turn: this.turnCount, phase: this.phase,
+    };
     await this.log(`${from.name} ${asName ? `将 ${cardLabel(card)} 当【${meta.cn}】使用` : `使用 ${cardLabel(card)}`}${targets.length ? ' → ' + targets.map(t => t.name).join('、') : ''}`);
     if (effName === 'sha' && !ignoreShaLimit && !(card && card.ignoreShaLimit)) from.flags.shaUsed = (from.flags.shaUsed || 0) + 1;
     // M8 隐匿：使用牌即解除隐匿（武将牌翻开）
@@ -2346,6 +2360,8 @@ export class Game {
       result: this.result ? { text: this.result.text, winners: (this.result.winners || []).map(p => p.seat) } : null,
       deckCount: this.deck.length,
       discardCount: this.discardPile.length,
+      // 最近一次使用牌（供前端展示「他人打出的牌」）：牌面 + 使用者 + 目标座位
+      lastPlay: this.lastPlay || null,
       // 询问内容只发给当事人：options/cards 里含手牌 id 与暗选信息，广播出去等于亮牌
       pending: this.pending && (forSeat != null && this.pending.seat === forSeat)
         ? { kind: this.pending.kind, prompt: this.pending.prompt, deadline: this.pending.deadline, seat: this.pending.seat }

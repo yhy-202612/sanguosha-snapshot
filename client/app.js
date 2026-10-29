@@ -8,7 +8,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const S = {
   meta: null, cards: {}, roomId: null, token: null, seat: null,
-  snap: null, ask: null, sel: [], targets: [], view: 'lobby', es: null, timer: null,
+  snap: null, ask: null, sel: [], targets: [], view: 'lobby', es: null, timer: null, lastPlaySeq: 0,
   logOpen: false, logTouched: false,
   // 大厅配置：武将包多选 / 自定义将池 / 选将模式 / 几选一 / 双将 / 托管
   packs: new Set(['standard']), pool: new Set(), pickMode: 'random',
@@ -429,7 +429,7 @@ function fxReset() {
   FX.timers.clear();
   for (const a of [...FX.anims]) { try { a.cancel(); } catch {} }
   FX.anims.clear();
-  document.querySelectorAll('.fx-fly,.fx-float,.fx-banner,.fx-skill,.fx5-slot,.fx5-vig').forEach(n => n.remove());
+  document.querySelectorAll('.fx-fly,.fx-float,.fx-banner,.fx-skill,.fx5-slot,.fx5-vig,.fx5-opp').forEach(n => n.remove());
   try { fxTargetClear(); } catch {}
   document.querySelectorAll('.fx-pulse').forEach(n => n.classList.remove('fx-pulse'));
   FX.lastHp.clear(); FX.lastArmor.clear(); FX.floatN.clear();
@@ -551,6 +551,30 @@ function fxFlyCards(ids) {
     anim.oncancel = done;
   });
 }
+// v2：他人打出的牌 —— 桌面中央亮出牌面（此前别人的牌只能从战报文字里读）
+function fxOppPlay(snap) {
+  const lp = snap && snap.lastPlay;
+  if (!lp || !lp.seq) return;
+  if (S.lastPlaySeq === lp.seq) return;
+  S.lastPlaySeq = lp.seq;
+  if (S.view !== 'table') return;
+  if (S.seat != null && lp.seat === S.seat) return;      // 自己出的牌走 renderHand 的飞牌动画
+  const meta = S.cards[lp.name] || {};
+  const red = lp.suit === 'heart' || lp.suit === 'diamond';
+  const suit = { spade: '♠', heart: '♥', club: '♣', diamond: '♦' }[lp.suit] || '';
+  let box = document.getElementById('fx5Opp');
+  if (!box) { box = el('div', 'fx5-opp'); box.id = 'fx5Opp'; document.body.appendChild(box); }
+  box.innerHTML = '';
+  const d = el('div', 'card fx5-opp-card' + (meta.type === 'equip' ? ' equip' : meta.type === 'trick' ? ' trick' : ''));
+  d.innerHTML = `<div class="cs ${red ? 'red' : 'black'}">${suit}${lp.num || ''}</div>`
+    + `<div class="cn">${esc(meta.cn || lp.name || '')}</div>`
+    + `<div class="ct">${esc(lp.player || '')}</div>`;
+  box.appendChild(d);
+  box.classList.add('on');
+  clearTimeout(box._fxT);
+  box._fxT = setTimeout(() => { box.classList.remove('on'); }, 1200);
+}
+
 // v2：把当前行动者座位卡滚进横向可视区（只动容器 scrollLeft，不带动整页）
 function fxScrollActiveIntoView() {
   const box = document.getElementById('opponents');
@@ -1826,6 +1850,8 @@ function renderTable() {
   const cur = snap.players[snap.currentIndex];
   $('#phaseInfo').innerHTML = cur ? `当前回合：<b>${esc(cur.name)}</b>（${esc(cur.generalName)}）` : '';
   $('#discardInfo').textContent = `弃牌堆 ${snap.discardCount} 张`;
+  // v2：他人打出的牌 → 桌面中央显示牌面（自己的出牌已有手牌飞出动画）
+  try { fxOppPlay(snap); } catch {}
   // v2：行动者在横滑条里可能跑到屏外 → 渲染后把它滚进可视区
   try { fxScrollActiveIntoView(); } catch {}
   syncAskOffset();
@@ -2708,6 +2734,6 @@ window.__SGFN = { renderRoom, renderTable, renderActions, autoTargetSeats, rende
   // 真 AI 玩家相关：供自动化验收驱动（只读/渲染入口，不含任何密钥）
   openRoomSettings, handleAiThink, syncAiThinking, refreshLLM,
   // UI v2（测试版）验收用
-  fxSlotShow, fxScrollActiveIntoView };
+  fxSlotShow, fxScrollActiveIntoView, fxOppPlay };
 
 init();
